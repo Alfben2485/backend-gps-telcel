@@ -31,7 +31,7 @@ app.get("/", (req,res)=>{
 
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.get("/gcapi/auth")
+    const r = await api.get("/api/devices")
     res.json({ok:true,data:r.data})
   }catch(e){
     res.status(500).json({ok:false,error:e.message})
