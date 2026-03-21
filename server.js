@@ -32,7 +32,7 @@ app.get("/", (req,res)=>{
 /* TEST */
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.get("/gcapi/user")
+    const r = await api.post("/gcapi/user", {})
     res.json({ok:true,data:r.data})
   }catch(e){
     res.status(500).json({
