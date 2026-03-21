@@ -29,14 +29,10 @@ app.get("/", (req,res)=>{
   res.send("Backend GPS Telcel activo 🚀")
 })
 
-/* TEST FINAL CORREGIDO */
+/* ✅ TEST FUNCIONAL REAL */
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/get/sims", {
-      accountId: 789,   // 🔥 IMPORTANTE (tu accountId)
-      page: 0,
-      size: 10
-    })
+    const r = await api.post("/gcapi/sims/account", {})
 
     res.json({
       ok:true,
@@ -50,32 +46,17 @@ app.get("/api/test", async (req,res)=>{
   }
 })
 
-/* LOGIN */
-app.post("/api/login", async (req,res)=>{
-  try{
-    const r = await api.post("/gcapi/auth", req.body)
-    res.json(r.data)
-  }catch(e){
-    res.status(500).json(e.response?.data || e.message)
-  }
-})
-
 /* LISTAR SIMS */
 app.get("/api/sims", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/get/sims", {
-      accountId: 789,
-      page: 0,
-      size: 50
-    })
-
+    const r = await api.post("/gcapi/sims/account", {})
     res.json(r.data)
   }catch(e){
     res.status(500).json(e.response?.data || e.message)
   }
 })
 
-/* CONSULTAR SIM POR ICCID */
+/* CONSULTAR ESTADO DE SIM */
 app.get("/api/sim/:iccid", async (req,res)=>{
   try{
     const iccid = req.params.iccid
@@ -90,7 +71,7 @@ app.get("/api/sim/:iccid", async (req,res)=>{
   }
 })
 
-/* CONSUMO DE DATOS */
+/* CONSUMO */
 app.get("/api/sim/:iccid/usage", async (req,res)=>{
   try{
     const iccid = req.params.iccid
