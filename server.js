@@ -3,6 +3,7 @@ require("dotenv").config()
 const express = require("express")
 const axios = require("axios")
 const cors = require("cors")
+const https = require("https")
 
 const app = express()
 
@@ -11,8 +12,6 @@ app.use(cors())
 
 const API_BASE = "https://cc.amx.claroconnect.com:8443"
 const TOKEN = process.env.API_TOKEN
-
-const https = require("https")
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -25,44 +24,76 @@ const api = axios.create({
   }
 })
 
+/* ROOT */
 app.get("/", (req,res)=>{
   res.send("Backend GPS Telcel activo 🚀")
 })
 
+/* TEST */
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.get("/api/devices")
+    const r = await api.get("/gcapi/user")
     res.json({ok:true,data:r.data})
   }catch(e){
-    res.status(500).json({ok:false,error:e.message})
+    res.status(500).json({
+      ok:false,
+      error:e.response?.data || e.message
+    })
   }
 })
 
-app.get("/api/sim/:code", async (req,res)=>{
+/* LOGIN */
+app.post("/api/login", async (req,res)=>{
   try{
-    const code = req.params.code
-    const r = await api.get(`/api/sims/${code}`)
+    const r = await api.post("/gcapi/auth", req.body)
     res.json(r.data)
   }catch(e){
-    res.status(500).json({error:"SIM no encontrada"})
+    res.status(500).json(e.response?.data || e.message)
   }
 })
 
-app.post("/api/sims/bulk", async (req,res)=>{
-  const {codes} = req.body
-
-  let results = []
-
-  for(const code of codes){
-    try{
-      const r = await api.get(`/api/sims/${code}`)
-      results.push(r.data)
-    }catch{
-      results.push({code,error:"No encontrado"})
-    }
+/* LISTAR SIMS */
+app.get("/api/sims", async (req,res)=>{
+  try{
+    const r = await api.post("/gcapi/get/sims", {})
+    res.json(r.data)
+  }catch(e){
+    res.status(500).json(e.response?.data || e.message)
   }
+})
 
-  res.json(results)
+/* CONSULTAR SIM */
+app.get("/api/sim/:iccid", async (req,res)=>{
+  try{
+    const iccid = req.params.iccid
+    const r = await api.get("/gcapi/getSIMState", {
+      params: { iccid }
+    })
+    res.json(r.data)
+  }catch(e){
+    res.status(500).json(e.response?.data || e.message)
+  }
+})
+
+/* CONSUMO DE DATOS */
+app.get("/api/sim/:iccid/usage", async (req,res)=>{
+  try{
+    const iccid = req.params.iccid
+    const r = await api.post("/gcapi/sim/Data/Usage", { iccid })
+    res.json(r.data)
+  }catch(e){
+    res.status(500).json(e.response?.data || e.message)
+  }
+})
+
+/* CAMBIAR ESTADO */
+app.put("/api/sim/state", async (req,res)=>{
+  try{
+    const r = await api.put("/gcapi/device/changeState", req.body)
+    res.json(r.data)
+  }catch(e){
+    res.status(500).json(e.response?.data || e.message)
+  }
 })
 
 const PORT = process.env.PORT || 3000
