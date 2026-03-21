@@ -29,10 +29,10 @@ app.get("/", (req,res)=>{
   res.send("Backend GPS Telcel activo 🚀")
 })
 
-/* TEST */
+/* TEST CORREGIDO */
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/user", {})
+    const r = await api.post("/gcapi/get/sims", {}) // 🔥 endpoint correcto
     res.json({ok:true,data:r.data})
   }catch(e){
     res.status(500).json({
@@ -66,9 +66,11 @@ app.get("/api/sims", async (req,res)=>{
 app.get("/api/sim/:iccid", async (req,res)=>{
   try{
     const iccid = req.params.iccid
+
     const r = await api.get("/gcapi/getSIMState", {
       params: { iccid }
     })
+
     res.json(r.data)
   }catch(e){
     res.status(500).json(e.response?.data || e.message)
@@ -79,7 +81,11 @@ app.get("/api/sim/:iccid", async (req,res)=>{
 app.get("/api/sim/:iccid/usage", async (req,res)=>{
   try{
     const iccid = req.params.iccid
-    const r = await api.post("/gcapi/sim/Data/Usage", { iccid })
+
+    const r = await api.post("/gcapi/sim/Data/Usage", {
+      iccid
+    })
+
     res.json(r.data)
   }catch(e){
     res.status(500).json(e.response?.data || e.message)
