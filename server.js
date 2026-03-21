@@ -29,10 +29,11 @@ app.get("/", (req,res)=>{
   res.send("Backend GPS Telcel activo 🚀")
 })
 
-/* TEST FUNCIONAL */
+/* TEST FINAL CORREGIDO */
 app.get("/api/test", async (req,res)=>{
   try{
     const r = await api.post("/gcapi/get/sims", {
+      accountId: 789,   // 🔥 IMPORTANTE (tu accountId)
       page: 0,
       size: 10
     })
@@ -63,6 +64,7 @@ app.post("/api/login", async (req,res)=>{
 app.get("/api/sims", async (req,res)=>{
   try{
     const r = await api.post("/gcapi/get/sims", {
+      accountId: 789,
       page: 0,
       size: 50
     })
@@ -103,7 +105,7 @@ app.get("/api/sim/:iccid/usage", async (req,res)=>{
   }
 })
 
-/* CAMBIAR ESTADO (ACTIVAR / SUSPENDER) */
+/* CAMBIAR ESTADO */
 app.put("/api/sim/state", async (req,res)=>{
   try{
     const r = await api.put("/gcapi/device/changeState", req.body)
