@@ -29,11 +29,18 @@ app.get("/", (req,res)=>{
   res.send("Backend GPS Telcel activo 🚀")
 })
 
-/* TEST CORREGIDO */
+/* TEST FUNCIONAL */
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/get/sims", {}) // 🔥 endpoint correcto
-    res.json({ok:true,data:r.data})
+    const r = await api.post("/gcapi/get/sims", {
+      page: 0,
+      size: 10
+    })
+
+    res.json({
+      ok:true,
+      data:r.data
+    })
   }catch(e){
     res.status(500).json({
       ok:false,
@@ -55,14 +62,18 @@ app.post("/api/login", async (req,res)=>{
 /* LISTAR SIMS */
 app.get("/api/sims", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/get/sims", {})
+    const r = await api.post("/gcapi/get/sims", {
+      page: 0,
+      size: 50
+    })
+
     res.json(r.data)
   }catch(e){
     res.status(500).json(e.response?.data || e.message)
   }
 })
 
-/* CONSULTAR SIM */
+/* CONSULTAR SIM POR ICCID */
 app.get("/api/sim/:iccid", async (req,res)=>{
   try{
     const iccid = req.params.iccid
@@ -92,7 +103,7 @@ app.get("/api/sim/:iccid/usage", async (req,res)=>{
   }
 })
 
-/* CAMBIAR ESTADO */
+/* CAMBIAR ESTADO (ACTIVAR / SUSPENDER) */
 app.put("/api/sim/state", async (req,res)=>{
   try{
     const r = await api.put("/gcapi/device/changeState", req.body)
