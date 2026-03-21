@@ -29,10 +29,13 @@ app.get("/", (req,res)=>{
   res.send("Backend GPS Telcel activo 🚀")
 })
 
-/* ✅ TEST FUNCIONAL REAL */
+/* 🔥 TEST DEFINITIVO */
 app.get("/api/test", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/sims/account", {})
+    const r = await api.post("/gcapi/device/list", {
+      page: 0,
+      size: 10
+    })
 
     res.json({
       ok:true,
@@ -46,17 +49,20 @@ app.get("/api/test", async (req,res)=>{
   }
 })
 
-/* LISTAR SIMS */
-app.get("/api/sims", async (req,res)=>{
+/* LISTAR DISPOSITIVOS */
+app.get("/api/devices", async (req,res)=>{
   try{
-    const r = await api.post("/gcapi/sims/account", {})
+    const r = await api.post("/gcapi/device/list", {
+      page: 0,
+      size: 50
+    })
     res.json(r.data)
   }catch(e){
     res.status(500).json(e.response?.data || e.message)
   }
 })
 
-/* CONSULTAR ESTADO DE SIM */
+/* CONSULTAR SIM */
 app.get("/api/sim/:iccid", async (req,res)=>{
   try{
     const iccid = req.params.iccid
