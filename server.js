@@ -12,8 +12,13 @@ app.use(cors())
 const API_BASE = "https://cc.amx.claroconnect.com:8443"
 const TOKEN = process.env.API_TOKEN
 
+const https = require("https")
+
 const api = axios.create({
   baseURL: API_BASE,
+  httpsAgent: new https.Agent({
+    rejectUnauthorized: false
+  }),
   headers: {
     Authorization: `Bearer ${TOKEN}`,
     "Content-Type": "application/json"
