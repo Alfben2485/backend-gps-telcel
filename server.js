@@ -1,109 +1,142 @@
-require("dotenv").config()
+const express = require("express");
+const axios = require("axios");
+const https = require("https");
+const cors = require("cors");
 
-const express = require("express")
-const axios = require("axios")
-const cors = require("cors")
-const https = require("https")
+const app = express();
+app.use(express.json());
+app.use(cors());
 
-const app = express()
+// 🔐 Config SSL (evita error de certificado de Claro)
+const agent = new https.Agent({
+  rejectUnauthorized: false
+});
 
-app.use(express.json())
-app.use(cors())
+// 🔑 Variables de entorno (Railway)
+const BASE_URL = "https://cc.amx.claroconnect.com:8443";
+const TOKEN = process.env.TOKEN;
 
-const API_BASE = "https://cc.amx.claroconnect.com:8443"
-const TOKEN = process.env.API_TOKEN
+// 🔍 TEST
+app.get("/api/test", (req, res) => {
+  res.json({ ok: true, message: "Backend funcionando 🚀" });
+});
 
-const api = axios.create({
-  baseURL: API_BASE,
-  httpsAgent: new https.Agent({
-    rejectUnauthorized: false
-  }),
-  headers: {
-    Authorization: `Bearer ${TOKEN}`,
-    "Content-Type": "application/json"
-  }
-})
+// 📡 OBTENER DISPOSITIVOS / SIMS
+app.get("/api/devices", async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/gcapi/device/list`,
+      {}, // body vacío (ajustable si Claro pide filtros)
+      {
+        httpsAgent: agent,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-/* ROOT */
-app.get("/", (req,res)=>{
-  res.send("Backend GPS Telcel activo 🚀")
-})
-
-/* 🔥 TEST DEFINITIVO */
-app.get("/api/test", async (req,res)=>{
-  try{
-    const r = await api.post("/gcapi/device/list", {
-      page: 0,
-      size: 10
-    })
-
-    res.json({
-      ok:true,
-      data:r.data
-    })
-  }catch(e){
+    res.json(response.data);
+  } catch (error) {
+    console.error("ERROR:", error.response?.data || error.message);
     res.status(500).json({
-      ok:false,
-      error:e.response?.data || e.message
-    })
+      ok: false,
+      error: error.response?.data || error.message
+    });
   }
-})
+});
 
-/* LISTAR DISPOSITIVOS */
-app.get("/api/devices", async (req,res)=>{
-  try{
-    const r = await api.post("/gcapi/device/list", {
-      page: 0,
-      size: 50
-    })
-    res.json(r.data)
-  }catch(e){
-    res.status(500).json(e.response?.data || e.message)
+// 🔎 BUSCAR POR ICCID (opcional)
+app.get("/api/device/:iccid", async (req, res) => {
+  try {
+    const { iccid } = req.params;
+
+    const response = await axios.post(
+      `${BASE_URL}/gcapi/get/sims`,
+      {
+        iccid: iccid
+      },
+      {
+        httpsAgent: agent,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error("ERROR:", error.response?.data || error.message);
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
   }
-})
+});
 
-/* CONSULTAR SIM */
-app.get("/api/sim/:iccid", async (req,res)=>{
-  try{
-    const iccid = req.params.iccid
+// 🔄 CAMBIAR ESTADO SIM (ACTIVAR / SUSPENDER)
+app.put("/api/device/state", async (req, res) => {
+  try {
+    const { iccid, state } = req.body;
 
-    const r = await api.get("/gcapi/getSIMState", {
-      params: { iccid }
-    })
+    const response = await axios.put(
+      `${BASE_URL}/gcapi/device/changeState`,
+      {
+        iccid: iccid,
+        state: state // ACTIVE / SUSPENDED
+      },
+      {
+        httpsAgent: agent,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-    res.json(r.data)
-  }catch(e){
-    res.status(500).json(e.response?.data || e.message)
+    res.json(response.data);
+  } catch (error) {
+    console.error("ERROR:", error.response?.data || error.message);
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
   }
-})
+});
 
-/* CONSUMO */
-app.get("/api/sim/:iccid/usage", async (req,res)=>{
-  try{
-    const iccid = req.params.iccid
+// 📊 USO DE DATOS
+app.get("/api/device/usage/:iccid", async (req, res) => {
+  try {
+    const { iccid } = req.params;
 
-    const r = await api.post("/gcapi/sim/Data/Usage", {
-      iccid
-    })
+    const response = await axios.post(
+      `${BASE_URL}/gcapi/sim/Data/Usage`,
+      {
+        iccid: iccid
+      },
+      {
+        httpsAgent: agent,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-    res.json(r.data)
-  }catch(e){
-    res.status(500).json(e.response?.data || e.message)
+    res.json(response.data);
+  } catch (error) {
+    console.error("ERROR:", error.response?.data || error.message);
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
   }
-})
+});
 
-/* CAMBIAR ESTADO */
-app.put("/api/sim/state", async (req,res)=>{
-  try{
-    const r = await api.put("/gcapi/device/changeState", req.body)
-    res.json(r.data)
-  }catch(e){
-    res.status(500).json(e.response?.data || e.message)
-  }
-})
+// 🚀 SERVER
+const PORT = process.env.PORT || 3000;
 
-const PORT = process.env.PORT || 3000
-
-app.listen(PORT,()=>{
-  console.log("Servidor corriendo en puerto " + PORT)
-})
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en puerto ${PORT}`);
+});
