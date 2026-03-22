@@ -21,7 +21,7 @@ const PASSWORD = process.env.PASSWORD;
 
 let TOKEN = "";
 
-// 🔐 FUNCIÓN PARA OBTENER TOKEN
+// 🔐 FUNCIÓN PARA OBTENER TOKEN (INTELIGENTE)
 async function getToken() {
   try {
     const response = await axios.post(
@@ -38,8 +38,22 @@ async function getToken() {
       }
     );
 
-    TOKEN = response.data.token;
-    console.log("✅ Token obtenido correctamente");
+    console.log("🔍 RESPUESTA LOGIN:", response.data);
+
+    // 🔥 DETECTAR TOKEN AUTOMÁTICAMENTE
+    if (response.data.token) {
+      TOKEN = response.data.token;
+    } else if (response.data.accessToken) {
+      TOKEN = response.data.accessToken;
+    } else if (response.data.result?.token) {
+      TOKEN = response.data.result.token;
+    } else {
+      console.log("❌ No se encontró token en la respuesta");
+      TOKEN = "";
+    }
+
+    console.log("✅ TOKEN GUARDADO:", TOKEN ? "OK" : "VACÍO");
+
   } catch (error) {
     console.error("❌ Error obteniendo token:", error.response?.data || error.message);
   }
@@ -56,49 +70,40 @@ app.get("/api/test", (req, res) => {
   });
 });
 
+// 🔁 FUNCIÓN PARA HACER REQUEST CON REINTENTO
+async function requestWithRetry(config) {
+  try {
+    return await axios(config);
+  } catch (error) {
+    if (error.response?.data?.identificationCode === 1005) {
+      console.log("🔄 Token expirado, renovando...");
+      await getToken();
+
+      config.headers.Authorization = `Bearer ${TOKEN}`;
+      return await axios(config);
+    }
+    throw error;
+  }
+}
+
 // 📡 LISTAR DISPOSITIVOS
 app.get("/api/devices", async (req, res) => {
   try {
-    let response;
-
-    try {
-      response = await axios.post(
-        `${BASE_URL}/gcapi/device/list`,
-        {},
-        {
-          httpsAgent: agent,
-          headers: {
-            Authorization: `Bearer ${TOKEN}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-    } catch (error) {
-      // 🔁 si token expiró
-      if (error.response?.data?.identificationCode === 1005) {
-        console.log("🔄 Token expirado, renovando...");
-        await getToken();
-
-        response = await axios.post(
-          `${BASE_URL}/gcapi/device/list`,
-          {},
-          {
-            httpsAgent: agent,
-            headers: {
-              Authorization: `Bearer ${TOKEN}`,
-              "Content-Type": "application/json"
-            }
-          }
-        );
-      } else {
-        throw error;
+    const response = await requestWithRetry({
+      method: "POST",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: {},
+      httpsAgent: agent,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
       }
-    }
+    });
 
     res.json(response.data);
 
   } catch (error) {
-    console.error("❌ ERROR FINAL:", error.response?.data || error.message);
+    console.error("❌ ERROR:", error.response?.data || error.message);
 
     res.status(500).json({
       ok: false,
@@ -112,39 +117,16 @@ app.get("/api/device/:iccid", async (req, res) => {
   try {
     const { iccid } = req.params;
 
-    let response;
-
-    try {
-      response = await axios.post(
-        `${BASE_URL}/gcapi/get/sims`,
-        { iccid },
-        {
-          httpsAgent: agent,
-          headers: {
-            Authorization: `Bearer ${TOKEN}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-    } catch (error) {
-      if (error.response?.data?.identificationCode === 1005) {
-        await getToken();
-
-        response = await axios.post(
-          `${BASE_URL}/gcapi/get/sims`,
-          { iccid },
-          {
-            httpsAgent: agent,
-            headers: {
-              Authorization: `Bearer ${TOKEN}`,
-              "Content-Type": "application/json"
-            }
-          }
-        );
-      } else {
-        throw error;
+    const response = await requestWithRetry({
+      method: "POST",
+      url: `${BASE_URL}/gcapi/get/sims`,
+      data: { iccid },
+      httpsAgent: agent,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
       }
-    }
+    });
 
     res.json(response.data);
 
@@ -161,39 +143,16 @@ app.put("/api/device/state", async (req, res) => {
   try {
     const { iccid, state } = req.body;
 
-    let response;
-
-    try {
-      response = await axios.put(
-        `${BASE_URL}/gcapi/device/changeState`,
-        { iccid, state },
-        {
-          httpsAgent: agent,
-          headers: {
-            Authorization: `Bearer ${TOKEN}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-    } catch (error) {
-      if (error.response?.data?.identificationCode === 1005) {
-        await getToken();
-
-        response = await axios.put(
-          `${BASE_URL}/gcapi/device/changeState`,
-          { iccid, state },
-          {
-            httpsAgent: agent,
-            headers: {
-              Authorization: `Bearer ${TOKEN}`,
-              "Content-Type": "application/json"
-            }
-          }
-        );
-      } else {
-        throw error;
+    const response = await requestWithRetry({
+      method: "PUT",
+      url: `${BASE_URL}/gcapi/device/changeState`,
+      data: { iccid, state },
+      httpsAgent: agent,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
       }
-    }
+    });
 
     res.json(response.data);
 
@@ -210,39 +169,16 @@ app.get("/api/device/usage/:iccid", async (req, res) => {
   try {
     const { iccid } = req.params;
 
-    let response;
-
-    try {
-      response = await axios.post(
-        `${BASE_URL}/gcapi/sim/Data/Usage`,
-        { iccid },
-        {
-          httpsAgent: agent,
-          headers: {
-            Authorization: `Bearer ${TOKEN}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-    } catch (error) {
-      if (error.response?.data?.identificationCode === 1005) {
-        await getToken();
-
-        response = await axios.post(
-          `${BASE_URL}/gcapi/sim/Data/Usage`,
-          { iccid },
-          {
-            httpsAgent: agent,
-            headers: {
-              Authorization: `Bearer ${TOKEN}`,
-              "Content-Type": "application/json"
-            }
-          }
-        );
-      } else {
-        throw error;
+    const response = await requestWithRetry({
+      method: "POST",
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      data: { iccid },
+      httpsAgent: agent,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
       }
-    }
+    });
 
     res.json(response.data);
 
