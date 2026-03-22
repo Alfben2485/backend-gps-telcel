@@ -7,19 +7,21 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// 🔐 SSL fix (Claro)
 const agent = new https.Agent({
   rejectUnauthorized: false
 });
 
+// 🌐 URL BASE CLARO
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
-// 🔐 VARIABLES
+// 🔑 VARIABLES (Railway)
 const USERNAME = process.env.USERNAME;
 const PASSWORD = process.env.PASSWORD;
 
 let TOKEN = "";
 
-// 🔑 FUNCIÓN LOGIN
+// 🔐 FUNCIÓN PARA OBTENER TOKEN
 async function getToken() {
   try {
     const response = await axios.post(
@@ -37,9 +39,9 @@ async function getToken() {
     );
 
     TOKEN = response.data.token;
-    console.log("Nuevo token obtenido");
+    console.log("✅ Token obtenido correctamente");
   } catch (error) {
-    console.error("Error al obtener token:", error.response?.data || error.message);
+    console.error("❌ Error obteniendo token:", error.response?.data || error.message);
   }
 }
 
@@ -48,37 +50,203 @@ getToken();
 
 // 🧪 TEST
 app.get("/api/test", (req, res) => {
-  res.json({ ok: true, token: TOKEN ? "ACTIVO" : "VACÍO" });
+  res.json({
+    ok: true,
+    token: TOKEN ? "ACTIVO" : "VACÍO"
+  });
 });
 
-// 📡 DISPOSITIVOS
+// 📡 LISTAR DISPOSITIVOS
 app.get("/api/devices", async (req, res) => {
   try {
-    if (!TOKEN) await getToken();
+    let response;
 
-    const response = await axios.post(
-      `${BASE_URL}/gcapi/device/list`,
-      {},
-      {
-        httpsAgent: agent,
-        headers: {
-          Authorization: `Bearer ${TOKEN}`,
-          "Content-Type": "application/json"
+    try {
+      response = await axios.post(
+        `${BASE_URL}/gcapi/device/list`,
+        {},
+        {
+          httpsAgent: agent,
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            "Content-Type": "application/json"
+          }
         }
+      );
+    } catch (error) {
+      // 🔁 si token expiró
+      if (error.response?.data?.identificationCode === 1005) {
+        console.log("🔄 Token expirado, renovando...");
+        await getToken();
+
+        response = await axios.post(
+          `${BASE_URL}/gcapi/device/list`,
+          {},
+          {
+            httpsAgent: agent,
+            headers: {
+              Authorization: `Bearer ${TOKEN}`,
+              "Content-Type": "application/json"
+            }
+          }
+        );
+      } else {
+        throw error;
       }
-    );
-
-    res.json(response.data);
-  } catch (error) {
-    console.error("ERROR:", error.response?.data || error.message);
-
-    // 🔁 si token expiró, vuelve a intentar
-    if (error.response?.data?.identificationCode === 1005) {
-      await getToken();
-
-      return res.json({ ok: false, retry: true, message: "Token renovado, intenta otra vez" });
     }
 
+    res.json(response.data);
+
+  } catch (error) {
+    console.error("❌ ERROR FINAL:", error.response?.data || error.message);
+
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
+
+// 🔎 BUSCAR POR ICCID
+app.get("/api/device/:iccid", async (req, res) => {
+  try {
+    const { iccid } = req.params;
+
+    let response;
+
+    try {
+      response = await axios.post(
+        `${BASE_URL}/gcapi/get/sims`,
+        { iccid },
+        {
+          httpsAgent: agent,
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    } catch (error) {
+      if (error.response?.data?.identificationCode === 1005) {
+        await getToken();
+
+        response = await axios.post(
+          `${BASE_URL}/gcapi/get/sims`,
+          { iccid },
+          {
+            httpsAgent: agent,
+            headers: {
+              Authorization: `Bearer ${TOKEN}`,
+              "Content-Type": "application/json"
+            }
+          }
+        );
+      } else {
+        throw error;
+      }
+    }
+
+    res.json(response.data);
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
+
+// 🔄 CAMBIAR ESTADO SIM
+app.put("/api/device/state", async (req, res) => {
+  try {
+    const { iccid, state } = req.body;
+
+    let response;
+
+    try {
+      response = await axios.put(
+        `${BASE_URL}/gcapi/device/changeState`,
+        { iccid, state },
+        {
+          httpsAgent: agent,
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    } catch (error) {
+      if (error.response?.data?.identificationCode === 1005) {
+        await getToken();
+
+        response = await axios.put(
+          `${BASE_URL}/gcapi/device/changeState`,
+          { iccid, state },
+          {
+            httpsAgent: agent,
+            headers: {
+              Authorization: `Bearer ${TOKEN}`,
+              "Content-Type": "application/json"
+            }
+          }
+        );
+      } else {
+        throw error;
+      }
+    }
+
+    res.json(response.data);
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
+
+// 📊 USO DE DATOS
+app.get("/api/device/usage/:iccid", async (req, res) => {
+  try {
+    const { iccid } = req.params;
+
+    let response;
+
+    try {
+      response = await axios.post(
+        `${BASE_URL}/gcapi/sim/Data/Usage`,
+        { iccid },
+        {
+          httpsAgent: agent,
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+    } catch (error) {
+      if (error.response?.data?.identificationCode === 1005) {
+        await getToken();
+
+        response = await axios.post(
+          `${BASE_URL}/gcapi/sim/Data/Usage`,
+          { iccid },
+          {
+            httpsAgent: agent,
+            headers: {
+              Authorization: `Bearer ${TOKEN}`,
+              "Content-Type": "application/json"
+            }
+          }
+        );
+      } else {
+        throw error;
+      }
+    }
+
+    res.json(response.data);
+
+  } catch (error) {
     res.status(500).json({
       ok: false,
       error: error.response?.data || error.message
@@ -90,5 +258,5 @@ app.get("/api/devices", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Servidor corriendo 🚀");
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
