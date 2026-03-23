@@ -15,7 +15,7 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
 // 🔥 TOKEN FIJO
-const TOKEN = "PEGA_AQUI_TU_TOKEN_REAL";
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MjI4NDM2MTk3LCJ1c2VySWQiOjU3M30.m-OufCeej5NGj08L6U6UOyu6eXdvWata0_Jm5-mK3l9LcdQiGvUXRuOloZIMOdr34l3xv1cfOJ8SOISznfqtDQ";
 
 // TEST
 app.get("/", (req, res) => {
