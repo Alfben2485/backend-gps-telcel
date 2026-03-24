@@ -16,7 +16,7 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
 // 🔥 TOKEN FIJO (REEMPLAZA CON EL TUYO)
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MjI4NDM2MTk3LCJ1c2VySWQiOjU3M30.m-OufCeej5NGj08L6U6UOyu6eXdvWata0_Jm5-mK3l9LcdQiGvUXRuOloZIMOdr34l3xv1cfOJ8SOISznfqtDQ";
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MzE2NDAzNDAzLCJ1c2VySWQiOjU3M30.qr7OWXXK09RHXVbZkWTIYSkNeGRWDXAGcUUdRSlFtsf56nZIFUD2AwXgHB6tURC5FcYcmYfbQ7_VH9M-yIdrhg";
 
 // 🧪 TEST
 app.get("/", (req, res) => {
