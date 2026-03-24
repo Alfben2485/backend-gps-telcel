@@ -1,4 +1,38 @@
-// 📡 LISTAR SIMS (CON PAGINACIÓN AUTOMÁTICA)
+const express = require("express");
+const axios = require("axios");
+const https = require("https");
+const cors = require("cors");
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// 🔐 SSL fix (Claro)
+const agent = new https.Agent({
+  rejectUnauthorized: false
+});
+
+// 🌐 URL BASE CLARO
+const BASE_URL = "https://cc.amx.claroconnect.com:8443";
+
+// 🔥 TOKEN FIJO
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MzE2NDAzNDAzLCJ1c2VySWQiOjU3M30.qr7OWXXK09RHXVbZkWTIYSkNeGRWDXAGcUUdRSlFtsf56nZIFUD2AwXgHB6tURC5FcYcmYfbQ7_VH9M-yIdrhg";
+
+const claroHeaders = {
+  Authorization: `Bearer ${TOKEN}`,
+  "Content-Type": "application/json"
+};
+
+// 🧪 TEST
+app.get("/", (req, res) => {
+  res.send("Servidor funcionando 🚀");
+});
+
+app.get("/api/test", (req, res) => {
+  res.json({ ok: true });
+});
+
+// 📡 LISTAR TODAS LAS SIMS (PAGINACIÓN AUTOMÁTICA)
 app.get("/api/devices", async (req, res) => {
   try {
     let allDevices = [];
@@ -10,13 +44,7 @@ app.get("/api/devices", async (req, res) => {
       const response = await axios.post(
         `${BASE_URL}/gcapi/device/list`,
         { pageNumber, pageSize },
-        {
-          httpsAgent: agent,
-          headers: {
-            Authorization: `Bearer ${TOKEN}`,
-            "Content-Type": "application/json"
-          }
-        }
+        { httpsAgent: agent, headers: claroHeaders }
       );
 
       const items = response.data.data || [];
@@ -40,4 +68,77 @@ app.get("/api/devices", async (req, res) => {
     console.error("ERROR DEVICES:", error.response?.data || error.message);
     res.status(500).json({ ok: false, error: error.response?.data || error.message });
   }
+});
+
+// 🔎 BUSCAR SIM POR ICCID
+app.get("/api/device/:iccid", async (req, res) => {
+  try {
+    const { iccid } = req.params;
+    const response = await axios.post(
+      `${BASE_URL}/gcapi/get/sims`,
+      { iccid },
+      { httpsAgent: agent, headers: claroHeaders }
+    );
+
+    const item = response.data.data[0];
+    res.json({
+      iccid: item.iccid,
+      msisdn: item.msisdn,
+      estado: item.state,
+      plan: item.servicePlan?.servicePlanName || "N/A"
+    });
+  } catch (error) {
+    console.error("ERROR BUSCAR:", error.response?.data || error.message);
+    res.status(500).json({ ok: false, error: error.response?.data || error.message });
+  }
+});
+
+// 🔄 CAMBIAR ESTADO SIM
+app.put("/api/device/state", async (req, res) => {
+  try {
+    const { iccid, state } = req.body;
+    const response = await axios.put(
+      `${BASE_URL}/gcapi/device/changeState`,
+      { iccid, state },
+      { httpsAgent: agent, headers: claroHeaders }
+    );
+
+    res.json({ ok: true, respuesta: response.data });
+  } catch (error) {
+    console.error("ERROR ESTADO:", error.response?.data || error.message);
+    res.status(500).json({ ok: false, error: error.response?.data || error.message });
+  }
+});
+
+// 📊 USO DE DATOS (convertido a MB)
+app.get("/api/device/usage/:iccid", async (req, res) => {
+  try {
+    const { iccid } = req.params;
+    const response = await axios.post(
+      `${BASE_URL}/gcapi/sim/Data/Usage`,
+      { iccid },
+      { httpsAgent: agent, headers: claroHeaders }
+    );
+
+    const data = response.data;
+
+    // Convertir KB a MB en todos los campos de bytes/KB encontrados
+    const convertido = {
+      ...data,
+      totalBytes: data.totalBytes ? parseFloat((data.totalBytes / 1024).toFixed(2)) : 0,
+      totalBytesMB: data.totalBytes ? parseFloat((data.totalBytes / 1024).toFixed(2)) : 0,
+      unidad: "MB"
+    };
+
+    res.json(convertido);
+  } catch (error) {
+    console.error("ERROR USAGE:", error.response?.data || error.message);
+    res.status(500).json({ ok: false, error: error.response?.data || error.message });
+  }
+});
+
+// 🚀 SERVIDOR
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("🚀 Servidor corriendo en puerto " + PORT);
 });
