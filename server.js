@@ -13,11 +13,13 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MzE2NDAzNDAzLCJ1c2VySWQiOjU3M30.qr7OWXXK09RHXVbZkWTIYSkNeGRWDXAGcUUdRSlFtsf56nZIFUD2AwXgHB6tURC5FcYcmYfbQ7_VH9M-yIdrhg"; // ⚠️ PON TU TOKEN
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MzE2NDAzNDAzLCJ1c2VySWQiOjU3M30.qr7OWXXK09RHXVbZkWTIYSkNeGRWDXAGcUUdRSlFtsf56nZIFUD2AwXgHB6tURC5FcYcmYfbQ7_VH9M-yIdrhg"; // 🔥 PON TU TOKEN
 
-const PAGE_SIZE = 100; // 🔥 FORZADO A 100
-const MAX_PAGES = 50; // 🔥 evita sobrecarga
+const PAGE_SIZE = 10; // 🔴 LA API SOLO MANDA 10
+const MAX_PAGES = 100; // 🔥 CUÁNTAS PÁGINAS RECORRER
+const MAX_RESULTS = 100; // 🔥 CUÁNTOS REGISTROS QUIERES
 
+// 🔹 HEADERS
 function claroHeaders() {
   return {
     Authorization: `Bearer ${TOKEN}`,
@@ -25,10 +27,12 @@ function claroHeaders() {
   };
 }
 
+// 🔹 ERROR FORMAT
 function formatError(error) {
   return error?.response?.data || error?.message || "Error desconocido";
 }
 
+// 🔹 EXTRAER ARRAY
 function extractArray(payload) {
   const candidates = [
     payload,
@@ -47,6 +51,7 @@ function extractArray(payload) {
   return [];
 }
 
+// 🔹 NORMALIZAR
 function normalizeDevice(item = {}) {
   return {
     iccid: item.iccid || "",
@@ -59,6 +64,7 @@ function normalizeDevice(item = {}) {
   };
 }
 
+// 🔹 REQUEST
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
@@ -72,6 +78,7 @@ async function claroRequest(config) {
   });
 }
 
+// 🔥 🔥 FUNCIÓN PRINCIPAL CORREGIDA
 async function fetchAllDevices() {
   const map = new Map();
 
@@ -92,28 +99,32 @@ async function fetchAllDevices() {
     }
 
     const rawItems = extractArray(response.data);
-    const devices = rawItems.map(normalizeDevice).filter(d => d.iccid);
 
-    let added = 0;
+    console.log(`📄 Página ${page} → ${rawItems.length} registros`);
 
-    for (const d of devices) {
-      if (!map.has(d.iccid)) {
-        map.set(d.iccid, d);
-        added++;
+    if (rawItems.length === 0) break;
+
+    for (const item of rawItems) {
+      const device = normalizeDevice(item);
+
+      if (device.iccid && !map.has(device.iccid)) {
+        map.set(device.iccid, device);
       }
     }
 
-    console.log(`Página ${page}: ${rawItems.length} recibidos`);
-
-    // 🔥 cortar si ya no hay más datos
-    if (rawItems.length === 0) break;
-    if (rawItems.length < PAGE_SIZE) break;
+    // 🔥 DETENER SI YA TIENES LOS QUE NECESITAS
+    if (map.size >= MAX_RESULTS) break;
   }
 
-  // 🔥 SOLO REGRESAR 100 PARA KODULAR
-  return Array.from(map.values()).slice(0, 100);
+  console.log("✅ TOTAL FINAL:", map.size);
+
+  return {
+    total: map.size,
+    data: Array.from(map.values()).slice(0, MAX_RESULTS),
+  };
 }
 
+// 🔹 BUSCAR POR ICCID
 async function fetchSimByIccid(iccid) {
   const response = await claroRequest({
     method: "post",
@@ -131,6 +142,8 @@ async function fetchSimByIccid(iccid) {
   return items[0] || null;
 }
 
+// 🔹 RUTAS
+
 app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
@@ -139,12 +152,13 @@ app.get("/api/test", (req, res) => {
   res.json({ ok: true });
 });
 
+// 🔥 LISTA DE SIMS
 app.get("/api/devices", async (req, res) => {
   try {
-    const devices = await fetchAllDevices();
-    res.json(devices);
+    const result = await fetchAllDevices();
+    res.json(result);
   } catch (error) {
-    console.error("ERROR:", formatError(error));
+    console.error("ERROR DEVICES:", formatError(error));
     res.status(500).json({
       ok: false,
       error: formatError(error),
@@ -152,6 +166,7 @@ app.get("/api/devices", async (req, res) => {
   }
 });
 
+// 🔥 BUSCAR SIM
 app.get("/api/device/:iccid", async (req, res) => {
   try {
     const item = await fetchSimByIccid(req.params.iccid);
@@ -172,6 +187,7 @@ app.get("/api/device/:iccid", async (req, res) => {
   }
 });
 
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
