@@ -15,11 +15,8 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0MzE2NDAzNDAzLCJ1c2VySWQiOjU3M30.qr7OWXXK09RHXVbZkWTIYSkNeGRWDXAGcUUdRSlFtsf56nZIFUD2AwXgHB6tURC5FcYcmYfbQ7_VH9M-yIdrhg"; // 🔥 PON TU TOKEN
 
-const PAGE_SIZE = 10; // 🔴 LA API SOLO MANDA 10
-const MAX_PAGES = 100; // 🔥 CUÁNTAS PÁGINAS RECORRER
-const MAX_RESULTS = 100; // 🔥 CUÁNTOS REGISTROS QUIERES
+const LIMIT = 1000; // 🔥 IGUAL QUE POSTMAN
 
-// 🔹 HEADERS
 function claroHeaders() {
   return {
     Authorization: `Bearer ${TOKEN}`,
@@ -27,48 +24,27 @@ function claroHeaders() {
   };
 }
 
-// 🔹 ERROR FORMAT
 function formatError(error) {
   return error?.response?.data || error?.message || "Error desconocido";
 }
 
-// 🔹 EXTRAER ARRAY
 function extractArray(payload) {
-  const candidates = [
-    payload,
-    payload?.data,
-    payload?.data?.data,
-    payload?.data?.items,
-    payload?.data?.results,
-    payload?.data?.content,
-    payload?.data?.rows,
-  ];
-
-  for (const c of candidates) {
-    if (Array.isArray(c)) return c;
-  }
-
-  return [];
+  return payload?.data || [];
 }
 
-// 🔹 NORMALIZAR
 function normalizeDevice(item = {}) {
   return {
     iccid: item.iccid || "",
     msisdn: item.msisdn || "",
     estado: item.state || item.status || "N/A",
-    plan:
-      item.servicePlan?.servicePlanName ||
-      item.plan ||
-      "N/A",
+    plan: item.servicePlan?.servicePlanName || "N/A",
   };
 }
 
-// 🔹 REQUEST
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
-    timeout: 30000,
+    timeout: 60000,
     validateStatus: () => true,
     ...config,
     headers: {
@@ -78,58 +54,15 @@ async function claroRequest(config) {
   });
 }
 
-// 🔥 🔥 FUNCIÓN PRINCIPAL CORREGIDA
+// 🔥 🔥 NUEVA FUNCIÓN (TIPO POSTMAN)
 async function fetchAllDevices() {
-  const map = new Map();
-
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const response = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: {
-        pageNumber: page,
-        pageSize: PAGE_SIZE,
-      },
-    });
-
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(
-        `Error ${response.status}: ${JSON.stringify(response.data)}`
-      );
-    }
-
-    const rawItems = extractArray(response.data);
-
-    console.log(`📄 Página ${page} → ${rawItems.length} registros`);
-
-    if (rawItems.length === 0) break;
-
-    for (const item of rawItems) {
-      const device = normalizeDevice(item);
-
-      if (device.iccid && !map.has(device.iccid)) {
-        map.set(device.iccid, device);
-      }
-    }
-
-    // 🔥 DETENER SI YA TIENES LOS QUE NECESITAS
-    if (map.size >= MAX_RESULTS) break;
-  }
-
-  console.log("✅ TOTAL FINAL:", map.size);
-
-  return {
-    total: map.size,
-    data: Array.from(map.values()).slice(0, MAX_RESULTS),
-  };
-}
-
-// 🔹 BUSCAR POR ICCID
-async function fetchSimByIccid(iccid) {
   const response = await claroRequest({
     method: "post",
-    url: `${BASE_URL}/gcapi/get/sims`,
-    data: { iccid },
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: {
+      start: 0,
+      length: LIMIT, // 🔥 CLAVE
+    },
   });
 
   if (response.status < 200 || response.status >= 300) {
@@ -138,8 +71,15 @@ async function fetchSimByIccid(iccid) {
     );
   }
 
-  const items = extractArray(response.data);
-  return items[0] || null;
+  const rawItems = extractArray(response.data);
+
+  console.log("TOTAL API:", response.data.recordsFiltered);
+  console.log("RECIBIDOS:", rawItems.length);
+
+  return {
+    total: response.data.recordsFiltered || rawItems.length,
+    data: rawItems.map(normalizeDevice),
+  };
 }
 
 // 🔹 RUTAS
@@ -152,13 +92,12 @@ app.get("/api/test", (req, res) => {
   res.json({ ok: true });
 });
 
-// 🔥 LISTA DE SIMS
 app.get("/api/devices", async (req, res) => {
   try {
     const result = await fetchAllDevices();
     res.json(result);
   } catch (error) {
-    console.error("ERROR DEVICES:", formatError(error));
+    console.error("ERROR:", formatError(error));
     res.status(500).json({
       ok: false,
       error: formatError(error),
@@ -166,28 +105,8 @@ app.get("/api/devices", async (req, res) => {
   }
 });
 
-// 🔥 BUSCAR SIM
-app.get("/api/device/:iccid", async (req, res) => {
-  try {
-    const item = await fetchSimByIccid(req.params.iccid);
+// 🔹 START
 
-    if (!item) {
-      return res.status(404).json({
-        ok: false,
-        error: "SIM no encontrada",
-      });
-    }
-
-    res.json(normalizeDevice(item));
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: formatError(error),
-    });
-  }
-});
-
-// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
