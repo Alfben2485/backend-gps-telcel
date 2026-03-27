@@ -37,18 +37,29 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 NORMALIZAR
+// 🔹 NORMALIZAR (🔥 PLAN CORRECTO)
 function normalizeDevice(item = {}) {
   return {
     iccid: item.iccid || "",
     msisdn: item.msisdn || "",
     imsi: item.imsi || item.imsiNumber || "",
     estado: item.state || item.status || "N/A",
+
+    // 🔥 PRIORIDAD CORRECTA DEL PLAN
     plan:
+      item.ratePlanName ||
+      item.devicePlan ||
       item.servicePlan?.servicePlanName ||
       item.plan ||
       "N/A",
   };
+}
+
+// 🔹 CONVERTIR NÚMEROS
+function toNumber(value) {
+  if (!value) return 0;
+  const n = Number(value);
+  return isNaN(n) ? 0 : n;
 }
 
 // 🔥 TOTAL SIMS
@@ -65,7 +76,7 @@ async function fetchTotalSims() {
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔥 BUSCAR SIM (PAGINADO)
+// 🔥 BUSCAR SIM (PAGINADO REAL)
 async function fetchSimByIccid(iccid) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
@@ -95,29 +106,37 @@ async function fetchSimByIccid(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO (USANDO IMSI ✅)
+// 🔥 CONSUMO CORRECTO (IMSI + DETECCIÓN)
 async function fetchUsage(imsi) {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-    data: { imsi }, // 🔥 CORRECTO
+    data: { imsi },
   });
 
   if (response.status < 200 || response.status >= 300) {
-    return { totalKB: 0, totalMB: 0 }; // fallback
+    return { totalKB: 0, totalMB: 0 };
   }
 
-  const usageData = response.data?.data || {};
+  const data = response.data?.data || {};
 
-  const totalKB =
-    usageData.totalKB ||
-    usageData.kb ||
-    usageData.usageKB ||
+  let totalKB =
+    toNumber(data.totalKB) ||
+    toNumber(data.kb) ||
+    toNumber(data.usageKB) ||
     0;
+
+  // 🔥 si viene en bytes
+  if (!totalKB && data.totalBytes) {
+    totalKB = toNumber(data.totalBytes) / 1024;
+  }
 
   const totalMB = Number((totalKB / 1024).toFixed(2));
 
-  return { totalKB, totalMB };
+  return {
+    totalKB: Math.round(totalKB),
+    totalMB,
+  };
 }
 
 // 🔹 ROOT
@@ -125,7 +144,7 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔥 🔥 ENDPOINT FINAL
+// 🔥 🔥 ENDPOINT COMPLETO
 app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const { iccid } = req.params;
@@ -142,7 +161,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
     const sim = normalizeDevice(simRaw);
 
     const [usage, totalSims] = await Promise.all([
-      fetchUsage(sim.imsi), // 🔥 ahora con IMSI
+      fetchUsage(sim.imsi),
       fetchTotalSims(),
     ]);
 
@@ -152,7 +171,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       iccid: sim.iccid,
       msisdn: sim.msisdn,
       estado: sim.estado,
-      plan: sim.plan,
+      plan: sim.plan, // 🔥 ya correcto
       consumoMB: usage.totalMB,
       consumoKB: usage.totalKB,
     });
@@ -166,7 +185,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
-// 🔹 START
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
