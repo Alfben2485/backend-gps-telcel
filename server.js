@@ -37,7 +37,7 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 NORMALIZAR (PLAN INTELIGENTE)
+// 🔹 NORMALIZAR PLAN
 function normalizeDevice(item = {}) {
   let planNombre =
     item.ratePlanName ||
@@ -48,7 +48,6 @@ function normalizeDevice(item = {}) {
     item.servicePlan?.servicePlanName ||
     item.servicePlanName;
 
-  // 🔥 si no hay nombre pero hay ID
   if (!planNombre && item.ratePlanId) {
     planNombre = `Plan ID ${item.ratePlanId}`;
   }
@@ -62,7 +61,7 @@ function normalizeDevice(item = {}) {
   };
 }
 
-// 🔹 CONVERTIR NÚMEROS
+// 🔹 UTIL
 function toNumber(value) {
   if (!value) return 0;
   const n = Number(value);
@@ -74,16 +73,13 @@ async function fetchTotalSims() {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/device/list`,
-    data: {
-      start: 0,
-      length: 1,
-    },
+    data: { start: 0, length: 1 },
   });
 
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔥 BUSCAR SIM
+// 🔥 BUSCAR SIM (PAGINADO)
 async function fetchSimByIccid(iccid) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
@@ -113,36 +109,56 @@ async function fetchSimByIccid(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO (IMSI)
+// 🔥 CONSUMO INTELIGENTE (VARIOS ENDPOINTS)
 async function fetchUsage(imsi) {
-  const response = await claroRequest({
-    method: "post",
-    url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-    data: { imsi },
-  });
+  const endpoints = [
+    "/gcapi/sim/Data/Usage",
+    "/gcapi/sim/usage/detail",
+    "/gcapi/data/usage",
+  ];
 
-  if (response.status < 200 || response.status >= 300) {
-    return { totalKB: 0, totalMB: 0 };
+  for (const endpoint of endpoints) {
+    try {
+      const response = await claroRequest({
+        method: "post",
+        url: `${BASE_URL}${endpoint}`,
+        data: { imsi },
+      });
+
+      const data = response.data?.data || response.data || {};
+
+      let totalBytes =
+        data.totalBytes ||
+        data.bytes ||
+        data.dataUsage ||
+        data.totalUsage ||
+        0;
+
+      let totalKB =
+        data.totalKB ||
+        data.kb ||
+        data.usageKB ||
+        0;
+
+      if (totalBytes && totalBytes > 0) {
+        totalKB = totalBytes / 1024;
+      }
+
+      if (totalKB > 0) {
+        const totalMB = Number((totalKB / 1024).toFixed(2));
+
+        return {
+          totalKB: Math.round(totalKB),
+          totalMB,
+        };
+      }
+
+    } catch (error) {
+      continue;
+    }
   }
 
-  const data = response.data?.data || {};
-
-  let totalKB =
-    toNumber(data.totalKB) ||
-    toNumber(data.kb) ||
-    toNumber(data.usageKB) ||
-    0;
-
-  if (!totalKB && data.totalBytes) {
-    totalKB = toNumber(data.totalBytes) / 1024;
-  }
-
-  const totalMB = Number((totalKB / 1024).toFixed(2));
-
-  return {
-    totalKB: Math.round(totalKB),
-    totalMB,
-  };
+  return { totalKB: 0, totalMB: 0 };
 }
 
 // 🔹 ROOT
@@ -191,7 +207,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
-// 🔹 START
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
