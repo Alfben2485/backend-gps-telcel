@@ -52,23 +52,40 @@ async function getTotalSims() {
   }
 }
 
-// 🔹 BUSCAR SIM
+// 🔥 🔥 BUSCAR SIM REAL (CORREGIDO)
 async function fetchSim(iccid) {
-  const response = await claroRequest({
-    method: "post",
-    url: `${BASE_URL}/gcapi/device/list`,
-    data: {
-      start: 0,
-      length: 1,
-      iccid: iccid,
-    },
-  });
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 50;
 
-  const items = response.data?.data || [];
-  return items[0] || null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: {
+        start: page * PAGE_SIZE,
+        length: PAGE_SIZE,
+      },
+    });
+
+    const items = response.data?.data || [];
+
+    const found = items.find(
+      (item) =>
+        String(item.iccid).trim() === String(iccid).trim()
+    );
+
+    if (found) {
+      console.log("✅ SIM ENCONTRADA:", found.iccid);
+      return found;
+    }
+
+    if (items.length < PAGE_SIZE) break;
+  }
+
+  return null;
 }
 
-// 🔥 🔥 CONSUMO TOTALMENTE SEGURO
+// 🔥 CONSUMO SEGURO (SIN ERROR SUSPENDED)
 async function fetchUsageSafe(iccid) {
   try {
     const response = await claroRequest({
@@ -113,7 +130,7 @@ async function fetchUsageSafe(iccid) {
     };
 
   } catch (error) {
-    console.log("⚠️ ERROR CONTROLADO:", error.message);
+    console.log("⚠️ ERROR CONSUMO:", error.message);
 
     return {
       consumoKB: 0,
@@ -126,6 +143,8 @@ async function fetchUsageSafe(iccid) {
 app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const iccid = req.params.iccid;
+
+    console.log("🔍 BUSCANDO ICCID:", iccid);
 
     const sim = await fetchSim(iccid);
 
@@ -148,12 +167,15 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       plan:
         sim.ratePlanName ||
         sim.servicePlan?.servicePlanName ||
+        sim.planName ||
         "N/A",
       consumoKB: consumo.consumoKB,
       consumoMB: consumo.consumoMB,
     });
 
   } catch (error) {
+    console.error("❌ ERROR:", error.message);
+
     res.status(500).json({
       ok: false,
       error: error.message,
