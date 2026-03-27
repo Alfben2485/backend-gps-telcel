@@ -37,42 +37,21 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 FORMATEAR ERRORES
-function formatError(error) {
-  return error?.response?.data || error?.message || "Error desconocido";
-}
-
-// 🔹 NORMALIZAR PLAN (🔥 CORREGIDO)
-function getPlanName(item) {
-  return (
-    item?.devicePlanName ||
-    item?.ratePlanName ||
-    item?.servicePlan?.servicePlanName ||
-    item?.planName ||
-    item?.plan ||
-    "N/A"
-  );
-}
-
-// 🔥 OBTENER TOTAL DE SIMS
+// 🔹 TOTAL SIMS
 async function getTotalSims() {
-  try {
-    const response = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: {
-        start: 0,
-        length: 1,
-      },
-    });
+  const response = await claroRequest({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: {
+      start: 0,
+      length: 1,
+    },
+  });
 
-    return response.data?.recordsFiltered || 0;
-  } catch (e) {
-    return 0;
-  }
+  return response.data?.recordsFiltered || 0;
 }
 
-// 🔥 BUSCAR SIM (MEJORADO)
+// 🔹 BUSCAR SIM (FORMA CORRECTA)
 async function fetchSim(iccid) {
   const response = await claroRequest({
     method: "post",
@@ -84,60 +63,40 @@ async function fetchSim(iccid) {
     },
   });
 
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Error ${response.status}`);
-  }
-
   const items = response.data?.data || [];
-
-  if (items.length === 0) return null;
-
-  return items[0];
+  return items[0] || null;
 }
 
-// 🔥 USO DE DATOS (CORREGIDO CON FALLBACK)
+// 🔹 CONSUMO DE DATOS (CORREGIDO)
 async function fetchUsage(iccid) {
-  try {
-    const response = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-      data: { iccid },
-    });
+  const response = await claroRequest({
+    method: "post",
+    url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+    data: {
+      iccid: iccid,
+    },
+  });
 
-    const data = response.data?.data || response.data || {};
+  const data = response.data?.data || {};
 
-    const totalKB =
-      Number(data.totalKB) ||
-      Number(data.usageKB) ||
-      Number(data.totalBytes) / 1024 ||
-      0;
+  const totalKB =
+    Number(data.totalKB) ||
+    Number(data.totalBytes) ||
+    Number(data.usageKB) ||
+    0;
 
-    const totalMB = Number((totalKB / 1024).toFixed(2));
+  const totalMB = Number((totalKB / 1024).toFixed(2));
 
-    return {
-      totalKB,
-      totalMB,
-    };
-  } catch (error) {
-    console.log("⚠️ SIN USO DE DATOS:", iccid);
-    return {
-      totalKB: 0,
-      totalMB: 0,
-    };
-  }
+  return {
+    consumoKB: totalKB,
+    consumoMB: totalMB,
+  };
 }
 
-// 🔹 RUTA PRINCIPAL
-app.get("/", (req, res) => {
-  res.send("Servidor funcionando 🚀");
-});
-
-// 🔥 BUSCAR SIM COMPLETA
-app.get("/api/device/:iccid", async (req, res) => {
+// 🔥 🔥 RUTA COMPLETA
+app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const iccid = req.params.iccid;
-
-    console.log("🔍 BUSCANDO:", iccid);
 
     const sim = await fetchSim(iccid);
 
@@ -148,40 +107,44 @@ app.get("/api/device/:iccid", async (req, res) => {
       });
     }
 
-    // 🔥 DATOS BASE
-    const iccidResp = sim.iccid || "";
-    const msisdn = sim.msisdn || "";
-    const estado = sim.state || sim.status || "N/A";
-    const plan = getPlanName(sim);
+    let consumo = { consumoKB: 0, consumoMB: 0 };
 
-    // 🔥 USO (NO ROMPE SI FALLA)
-    const usage = await fetchUsage(iccidResp);
+    try {
+      consumo = await fetchUsage(iccid);
+    } catch (e) {
+      console.log("⚠️ Error consumo:", e.message);
+    }
 
-    // 🔥 TOTAL SIMS
     const totalSims = await getTotalSims();
 
     res.json({
       ok: true,
       totalSims,
-      iccid: iccidResp,
-      msisdn,
-      estado,
-      plan,
-      consumoMB: usage.totalMB,
-      consumoKB: usage.totalKB,
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      estado: sim.state || sim.status,
+      plan:
+        sim.servicePlan?.servicePlanName ||
+        sim.ratePlanName ||
+        sim.planName ||
+        "N/A",
+      consumoKB: consumo.consumoKB,
+      consumoMB: consumo.consumoMB,
     });
-
   } catch (error) {
-    console.error("❌ ERROR:", formatError(error));
-
     res.status(500).json({
       ok: false,
-      error: formatError(error),
+      error: error.message,
     });
   }
 });
 
-// 🔹 START SERVER
+// 🔹 TEST
+app.get("/", (req, res) => {
+  res.send("Servidor funcionando 🚀");
+});
+
+// 🔹 START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
