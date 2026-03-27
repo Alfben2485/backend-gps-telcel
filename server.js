@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q"; // 🔥 IMPORTANTE
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q"; // 🔥
 
 // 🔹 HEADERS
 function claroHeaders() {
@@ -42,6 +42,7 @@ function normalizeDevice(item = {}) {
   return {
     iccid: item.iccid || "",
     msisdn: item.msisdn || "",
+    imsi: item.imsi || item.imsiNumber || "",
     estado: item.state || item.status || "N/A",
     plan:
       item.servicePlan?.servicePlanName ||
@@ -50,7 +51,7 @@ function normalizeDevice(item = {}) {
   };
 }
 
-// 🔥 TOTAL DE SIMS
+// 🔥 TOTAL SIMS
 async function fetchTotalSims() {
   const response = await claroRequest({
     method: "post",
@@ -61,16 +62,10 @@ async function fetchTotalSims() {
     },
   });
 
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(
-      `Error ${response.status}: ${JSON.stringify(response.data)}`
-    );
-  }
-
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔥 BUSCAR SIM (PAGINADO REAL)
+// 🔥 BUSCAR SIM (PAGINADO)
 async function fetchSimByIccid(iccid) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
@@ -85,25 +80,14 @@ async function fetchSimByIccid(iccid) {
       },
     });
 
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(
-        `Error ${response.status}: ${JSON.stringify(response.data)}`
-      );
-    }
-
     const items = response.data?.data || [];
-
-    console.log(`🔍 Página ${page} -> ${items.length}`);
 
     const found = items.find(
       (item) =>
         String(item.iccid).trim() === String(iccid).trim()
     );
 
-    if (found) {
-      console.log("✅ SIM encontrada en página:", page);
-      return found;
-    }
+    if (found) return found;
 
     if (items.length < PAGE_SIZE) break;
   }
@@ -111,18 +95,16 @@ async function fetchSimByIccid(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO
-async function fetchUsage(iccid) {
+// 🔥 CONSUMO (USANDO IMSI ✅)
+async function fetchUsage(imsi) {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-    data: { iccid },
+    data: { imsi }, // 🔥 CORRECTO
   });
 
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(
-      `Error ${response.status}: ${JSON.stringify(response.data)}`
-    );
+    return { totalKB: 0, totalMB: 0 }; // fallback
   }
 
   const usageData = response.data?.data || {};
@@ -135,10 +117,7 @@ async function fetchUsage(iccid) {
 
   const totalMB = Number((totalKB / 1024).toFixed(2));
 
-  return {
-    totalKB,
-    totalMB,
-  };
+  return { totalKB, totalMB };
 }
 
 // 🔹 ROOT
@@ -146,16 +125,12 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔥 🔥 ENDPOINT COMPLETO
+// 🔥 🔥 ENDPOINT FINAL
 app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const { iccid } = req.params;
 
-    const [simRaw, usage, totalSims] = await Promise.all([
-      fetchSimByIccid(iccid),
-      fetchUsage(iccid),
-      fetchTotalSims(),
-    ]);
+    const simRaw = await fetchSimByIccid(iccid);
 
     if (!simRaw) {
       return res.status(404).json({
@@ -165,6 +140,11 @@ app.get("/api/device/full/:iccid", async (req, res) => {
     }
 
     const sim = normalizeDevice(simRaw);
+
+    const [usage, totalSims] = await Promise.all([
+      fetchUsage(sim.imsi), // 🔥 ahora con IMSI
+      fetchTotalSims(),
+    ]);
 
     res.json({
       ok: true,
@@ -186,7 +166,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
-// 🔹 START SERVER
+// 🔹 START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
