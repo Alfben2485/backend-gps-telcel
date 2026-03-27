@@ -37,22 +37,28 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 NORMALIZAR (🔥 PLAN CORRECTO)
+// 🔹 NORMALIZAR (PLAN INTELIGENTE)
 function normalizeDevice(item = {}) {
+  let planNombre =
+    item.ratePlanName ||
+    item.offerName ||
+    item.productName ||
+    item.tariffName ||
+    item.planName ||
+    item.servicePlan?.servicePlanName ||
+    item.servicePlanName;
+
+  // 🔥 si no hay nombre pero hay ID
+  if (!planNombre && item.ratePlanId) {
+    planNombre = `Plan ID ${item.ratePlanId}`;
+  }
+
   return {
     iccid: item.iccid || "",
     msisdn: item.msisdn || "",
     imsi: item.imsi || item.imsiNumber || "",
     estado: item.state || item.status || "N/A",
-
-    // 🔥 PLAN REAL DEL DISPOSITIVO
-    plan:
-      item.ratePlanName ||
-      item.offerName ||
-      item.productName ||
-      item.devicePlan ||
-      item.servicePlan?.servicePlanName ||
-      "N/A",
+    plan: planNombre || "N/A",
   };
 }
 
@@ -77,7 +83,7 @@ async function fetchTotalSims() {
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔥 BUSCAR SIM (PAGINADO)
+// 🔥 BUSCAR SIM
 async function fetchSimByIccid(iccid) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
@@ -107,7 +113,7 @@ async function fetchSimByIccid(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO (USANDO IMSI)
+// 🔥 CONSUMO (IMSI)
 async function fetchUsage(imsi) {
   const response = await claroRequest({
     method: "post",
@@ -127,7 +133,6 @@ async function fetchUsage(imsi) {
     toNumber(data.usageKB) ||
     0;
 
-  // 🔥 si viene en bytes
   if (!totalKB && data.totalBytes) {
     totalKB = toNumber(data.totalBytes) / 1024;
   }
@@ -145,7 +150,7 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔥 🔥 ENDPOINT COMPLETO
+// 🔥 ENDPOINT FINAL
 app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const { iccid } = req.params;
@@ -172,13 +177,13 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       iccid: sim.iccid,
       msisdn: sim.msisdn,
       estado: sim.estado,
-      plan: sim.plan, // 🔥 ya correcto
+      plan: sim.plan,
       consumoMB: usage.totalMB,
       consumoKB: usage.totalKB,
     });
 
   } catch (error) {
-    console.error("ERROR FULL:", error.message);
+    console.error("ERROR:", error.message);
     res.status(500).json({
       ok: false,
       error: error.message,
@@ -186,7 +191,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
-// 🔹 START SERVER
+// 🔹 START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
