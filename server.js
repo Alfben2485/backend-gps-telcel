@@ -52,7 +52,7 @@ async function getTotalSims() {
   }
 }
 
-// 🔥 🔥 BUSCAR SIM REAL (CORREGIDO)
+// 🔥 BUSCAR SIM REAL (RECORRE TODAS)
 async function fetchSim(iccid) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
@@ -85,8 +85,10 @@ async function fetchSim(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO SEGURO (SIN ERROR SUSPENDED)
+// 🔥 CONSUMO (DOBLE ENDPOINT COMO CLARO)
 async function fetchUsageSafe(iccid) {
+
+  // 🔹 1. PRIMER INTENTO
   try {
     const response = await claroRequest({
       method: "post",
@@ -94,27 +96,7 @@ async function fetchUsageSafe(iccid) {
       data: { iccid },
     });
 
-    const raw = response.data;
-
-    // 🔥 DETECTAR ERROR DE CLARO
-    if (
-      typeof raw === "string" &&
-      raw.toLowerCase().includes("suspended")
-    ) {
-      return {
-        consumoKB: 0,
-        consumoMB: "No disponible",
-      };
-    }
-
-    if (raw?.message?.toLowerCase().includes("suspended")) {
-      return {
-        consumoKB: 0,
-        consumoMB: "No disponible",
-      };
-    }
-
-    const data = raw?.data || raw || {};
+    const data = response.data?.data || {};
 
     let totalKB =
       Number(data.totalKB) ||
@@ -122,21 +104,49 @@ async function fetchUsageSafe(iccid) {
       Number(data.totalBytes) / 1024 ||
       0;
 
-    const totalMB = Number((totalKB / 1024).toFixed(2));
+    if (totalKB > 0) {
+      return {
+        consumoKB: totalKB,
+        consumoMB: Number((totalKB / 1024).toFixed(2)),
+      };
+    }
 
-    return {
-      consumoKB: totalKB,
-      consumoMB: totalMB,
-    };
-
-  } catch (error) {
-    console.log("⚠️ ERROR CONSUMO:", error.message);
-
-    return {
-      consumoKB: 0,
-      consumoMB: "No disponible",
-    };
+  } catch (e) {
+    console.log("⚠️ intento 1 falló");
   }
+
+  // 🔹 2. SEGUNDO INTENTO (🔥 CLAVE)
+  try {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/usage/detail`,
+      data: { iccid },
+    });
+
+    const data = response.data?.data || response.data || {};
+
+    let totalKB =
+      Number(data.totalUsageKB) ||
+      Number(data.totalKB) ||
+      Number(data.totalBytes) / 1024 ||
+      0;
+
+    if (totalKB > 0) {
+      return {
+        consumoKB: totalKB,
+        consumoMB: Number((totalKB / 1024).toFixed(2)),
+      };
+    }
+
+  } catch (e) {
+    console.log("⚠️ intento 2 falló");
+  }
+
+  // 🔹 3. FALLBACK FINAL
+  return {
+    consumoKB: 0,
+    consumoMB: 0,
+  };
 }
 
 // 🔥 ENDPOINT FINAL
@@ -188,7 +198,7 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔹 START
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
