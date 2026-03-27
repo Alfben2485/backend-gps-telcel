@@ -39,13 +39,17 @@ async function claroRequest(config) {
 
 // 🔹 TOTAL SIMS
 async function getTotalSims() {
-  const response = await claroRequest({
-    method: "post",
-    url: `${BASE_URL}/gcapi/device/list`,
-    data: { start: 0, length: 1 },
-  });
+  try {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: { start: 0, length: 1 },
+    });
 
-  return response.data?.recordsFiltered || 0;
+    return response.data?.recordsFiltered || 0;
+  } catch {
+    return 0;
+  }
 }
 
 // 🔹 BUSCAR SIM
@@ -64,20 +68,8 @@ async function fetchSim(iccid) {
   return items[0] || null;
 }
 
-// 🔥 CONSUMO (SOLO SI ESTA ACTIVA)
-async function fetchUsageSafe(iccid, estado) {
-  // 🔥 SI ESTA SUSPENDIDA → NO CONSULTAR
-  if (
-    estado === "Suspended" ||
-    estado === "Deactivated" ||
-    estado === "Inactive"
-  ) {
-    return {
-      consumoKB: 0,
-      consumoMB: "No disponible",
-    };
-  }
-
+// 🔥 🔥 CONSUMO TOTALMENTE SEGURO
+async function fetchUsageSafe(iccid) {
   try {
     const response = await claroRequest({
       method: "post",
@@ -85,7 +77,27 @@ async function fetchUsageSafe(iccid, estado) {
       data: { iccid },
     });
 
-    const data = response.data?.data || {};
+    const raw = response.data;
+
+    // 🔥 DETECTAR ERROR DE CLARO
+    if (
+      typeof raw === "string" &&
+      raw.toLowerCase().includes("suspended")
+    ) {
+      return {
+        consumoKB: 0,
+        consumoMB: "No disponible",
+      };
+    }
+
+    if (raw?.message?.toLowerCase().includes("suspended")) {
+      return {
+        consumoKB: 0,
+        consumoMB: "No disponible",
+      };
+    }
+
+    const data = raw?.data || raw || {};
 
     let totalKB =
       Number(data.totalKB) ||
@@ -99,10 +111,13 @@ async function fetchUsageSafe(iccid, estado) {
       consumoKB: totalKB,
       consumoMB: totalMB,
     };
+
   } catch (error) {
+    console.log("⚠️ ERROR CONTROLADO:", error.message);
+
     return {
       consumoKB: 0,
-      consumoMB: 0,
+      consumoMB: "No disponible",
     };
   }
 }
@@ -121,11 +136,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       });
     }
 
-    const estado = sim.state || sim.status || "N/A";
-
-    // 🔥 USO SEGURO
-    const consumo = await fetchUsageSafe(iccid, estado);
-
+    const consumo = await fetchUsageSafe(iccid);
     const totalSims = await getTotalSims();
 
     res.json({
@@ -133,7 +144,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       totalSims,
       iccid: sim.iccid,
       msisdn: sim.msisdn,
-      estado: estado,
+      estado: sim.state || sim.status || "N/A",
       plan:
         sim.ratePlanName ||
         sim.servicePlan?.servicePlanName ||
@@ -141,6 +152,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       consumoKB: consumo.consumoKB,
       consumoMB: consumo.consumoMB,
     });
+
   } catch (error) {
     res.status(500).json({
       ok: false,
