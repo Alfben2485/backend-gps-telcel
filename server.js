@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q"; // 🔥
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q";
 
 // 🔹 HEADERS
 function claroHeaders() {
@@ -37,172 +37,146 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 NORMALIZAR PLAN
-function normalizeDevice(item = {}) {
-  let planNombre =
-    item.ratePlanName ||
-    item.offerName ||
-    item.productName ||
-    item.tariffName ||
-    item.planName ||
-    item.servicePlan?.servicePlanName ||
-    item.servicePlanName;
-
-  if (!planNombre && item.ratePlanId) {
-    planNombre = `Plan ID ${item.ratePlanId}`;
-  }
-
-  return {
-    iccid: item.iccid || "",
-    msisdn: item.msisdn || "",
-    imsi: item.imsi || item.imsiNumber || "",
-    estado: item.state || item.status || "N/A",
-    plan: planNombre || "N/A",
-  };
+// 🔹 FORMATEAR ERRORES
+function formatError(error) {
+  return error?.response?.data || error?.message || "Error desconocido";
 }
 
-// 🔹 UTIL
-function toNumber(value) {
-  if (!value) return 0;
-  const n = Number(value);
-  return isNaN(n) ? 0 : n;
+// 🔹 NORMALIZAR PLAN (🔥 CORREGIDO)
+function getPlanName(item) {
+  return (
+    item?.devicePlanName ||
+    item?.ratePlanName ||
+    item?.servicePlan?.servicePlanName ||
+    item?.planName ||
+    item?.plan ||
+    "N/A"
+  );
 }
 
-// 🔥 TOTAL SIMS
-async function fetchTotalSims() {
-  const response = await claroRequest({
-    method: "post",
-    url: `${BASE_URL}/gcapi/device/list`,
-    data: { start: 0, length: 1 },
-  });
-
-  return response.data?.recordsFiltered || 0;
-}
-
-// 🔥 BUSCAR SIM (PAGINADO)
-async function fetchSimByIccid(iccid) {
-  const PAGE_SIZE = 500;
-  const MAX_PAGES = 50;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
+// 🔥 OBTENER TOTAL DE SIMS
+async function getTotalSims() {
+  try {
     const response = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/device/list`,
       data: {
-        start: page * PAGE_SIZE,
-        length: PAGE_SIZE,
+        start: 0,
+        length: 1,
       },
     });
 
-    const items = response.data?.data || [];
-
-    const found = items.find(
-      (item) =>
-        String(item.iccid).trim() === String(iccid).trim()
-    );
-
-    if (found) return found;
-
-    if (items.length < PAGE_SIZE) break;
+    return response.data?.recordsFiltered || 0;
+  } catch (e) {
+    return 0;
   }
-
-  return null;
 }
 
-// 🔥 CONSUMO INTELIGENTE (VARIOS ENDPOINTS)
-async function fetchUsage(imsi) {
-  const endpoints = [
-    "/gcapi/sim/Data/Usage",
-    "/gcapi/sim/usage/detail",
-    "/gcapi/data/usage",
-  ];
+// 🔥 BUSCAR SIM (MEJORADO)
+async function fetchSim(iccid) {
+  const response = await claroRequest({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: {
+      start: 0,
+      length: 1,
+      iccid: iccid,
+    },
+  });
 
-  for (const endpoint of endpoints) {
-    try {
-      const response = await claroRequest({
-        method: "post",
-        url: `${BASE_URL}${endpoint}`,
-        data: { imsi },
-      });
-
-      const data = response.data?.data || response.data || {};
-
-      let totalBytes =
-        data.totalBytes ||
-        data.bytes ||
-        data.dataUsage ||
-        data.totalUsage ||
-        0;
-
-      let totalKB =
-        data.totalKB ||
-        data.kb ||
-        data.usageKB ||
-        0;
-
-      if (totalBytes && totalBytes > 0) {
-        totalKB = totalBytes / 1024;
-      }
-
-      if (totalKB > 0) {
-        const totalMB = Number((totalKB / 1024).toFixed(2));
-
-        return {
-          totalKB: Math.round(totalKB),
-          totalMB,
-        };
-      }
-
-    } catch (error) {
-      continue;
-    }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Error ${response.status}`);
   }
 
-  return { totalKB: 0, totalMB: 0 };
+  const items = response.data?.data || [];
+
+  if (items.length === 0) return null;
+
+  return items[0];
 }
 
-// 🔹 ROOT
+// 🔥 USO DE DATOS (CORREGIDO CON FALLBACK)
+async function fetchUsage(iccid) {
+  try {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      data: { iccid },
+    });
+
+    const data = response.data?.data || response.data || {};
+
+    const totalKB =
+      Number(data.totalKB) ||
+      Number(data.usageKB) ||
+      Number(data.totalBytes) / 1024 ||
+      0;
+
+    const totalMB = Number((totalKB / 1024).toFixed(2));
+
+    return {
+      totalKB,
+      totalMB,
+    };
+  } catch (error) {
+    console.log("⚠️ SIN USO DE DATOS:", iccid);
+    return {
+      totalKB: 0,
+      totalMB: 0,
+    };
+  }
+}
+
+// 🔹 RUTA PRINCIPAL
 app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔥 ENDPOINT FINAL
-app.get("/api/device/full/:iccid", async (req, res) => {
+// 🔥 BUSCAR SIM COMPLETA
+app.get("/api/device/:iccid", async (req, res) => {
   try {
-    const { iccid } = req.params;
+    const iccid = req.params.iccid;
 
-    const simRaw = await fetchSimByIccid(iccid);
+    console.log("🔍 BUSCANDO:", iccid);
 
-    if (!simRaw) {
-      return res.status(404).json({
+    const sim = await fetchSim(iccid);
+
+    if (!sim) {
+      return res.json({
         ok: false,
         error: "SIM no encontrada",
       });
     }
 
-    const sim = normalizeDevice(simRaw);
+    // 🔥 DATOS BASE
+    const iccidResp = sim.iccid || "";
+    const msisdn = sim.msisdn || "";
+    const estado = sim.state || sim.status || "N/A";
+    const plan = getPlanName(sim);
 
-    const [usage, totalSims] = await Promise.all([
-      fetchUsage(sim.imsi),
-      fetchTotalSims(),
-    ]);
+    // 🔥 USO (NO ROMPE SI FALLA)
+    const usage = await fetchUsage(iccidResp);
+
+    // 🔥 TOTAL SIMS
+    const totalSims = await getTotalSims();
 
     res.json({
       ok: true,
       totalSims,
-      iccid: sim.iccid,
-      msisdn: sim.msisdn,
-      estado: sim.estado,
-      plan: sim.plan,
+      iccid: iccidResp,
+      msisdn,
+      estado,
+      plan,
       consumoMB: usage.totalMB,
       consumoKB: usage.totalKB,
     });
 
   } catch (error) {
-    console.error("ERROR:", error.message);
+    console.error("❌ ERROR:", formatError(error));
+
     res.status(500).json({
       ok: false,
-      error: error.message,
+      error: formatError(error),
     });
   }
 });
