@@ -42,16 +42,13 @@ async function getTotalSims() {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/device/list`,
-    data: {
-      start: 0,
-      length: 1,
-    },
+    data: { start: 0, length: 1 },
   });
 
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔹 BUSCAR SIM (FORMA CORRECTA)
+// 🔹 BUSCAR SIM
 async function fetchSim(iccid) {
   const response = await claroRequest({
     method: "post",
@@ -67,33 +64,50 @@ async function fetchSim(iccid) {
   return items[0] || null;
 }
 
-// 🔹 CONSUMO DE DATOS (CORREGIDO)
-async function fetchUsage(iccid) {
-  const response = await claroRequest({
-    method: "post",
-    url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-    data: {
-      iccid: iccid,
-    },
-  });
+// 🔥 CONSUMO (SOLO SI ESTA ACTIVA)
+async function fetchUsageSafe(iccid, estado) {
+  // 🔥 SI ESTA SUSPENDIDA → NO CONSULTAR
+  if (
+    estado === "Suspended" ||
+    estado === "Deactivated" ||
+    estado === "Inactive"
+  ) {
+    return {
+      consumoKB: 0,
+      consumoMB: "No disponible",
+    };
+  }
 
-  const data = response.data?.data || {};
+  try {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      data: { iccid },
+    });
 
-  const totalKB =
-    Number(data.totalKB) ||
-    Number(data.totalBytes) ||
-    Number(data.usageKB) ||
-    0;
+    const data = response.data?.data || {};
 
-  const totalMB = Number((totalKB / 1024).toFixed(2));
+    let totalKB =
+      Number(data.totalKB) ||
+      Number(data.usageKB) ||
+      Number(data.totalBytes) / 1024 ||
+      0;
 
-  return {
-    consumoKB: totalKB,
-    consumoMB: totalMB,
-  };
+    const totalMB = Number((totalKB / 1024).toFixed(2));
+
+    return {
+      consumoKB: totalKB,
+      consumoMB: totalMB,
+    };
+  } catch (error) {
+    return {
+      consumoKB: 0,
+      consumoMB: 0,
+    };
+  }
 }
 
-// 🔥 🔥 RUTA COMPLETA
+// 🔥 ENDPOINT FINAL
 app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const iccid = req.params.iccid;
@@ -107,13 +121,10 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       });
     }
 
-    let consumo = { consumoKB: 0, consumoMB: 0 };
+    const estado = sim.state || sim.status || "N/A";
 
-    try {
-      consumo = await fetchUsage(iccid);
-    } catch (e) {
-      console.log("⚠️ Error consumo:", e.message);
-    }
+    // 🔥 USO SEGURO
+    const consumo = await fetchUsageSafe(iccid, estado);
 
     const totalSims = await getTotalSims();
 
@@ -122,11 +133,10 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       totalSims,
       iccid: sim.iccid,
       msisdn: sim.msisdn,
-      estado: sim.state || sim.status,
+      estado: estado,
       plan:
-        sim.servicePlan?.servicePlanName ||
         sim.ratePlanName ||
-        sim.planName ||
+        sim.servicePlan?.servicePlanName ||
         "N/A",
       consumoKB: consumo.consumoKB,
       consumoMB: consumo.consumoMB,
@@ -139,7 +149,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
-// 🔹 TEST
+// 🔹 ROOT
 app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
