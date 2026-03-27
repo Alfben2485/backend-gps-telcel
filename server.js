@@ -13,37 +13,16 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q"; // 🔥 PON TU TOKEN
 
-// 🔥 PON TU TOKEN AQUÍ
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q";
-
-const LIMIT = 1000; // lo que pides a Claro
-const MAX_RETURN = 100; // lo que mandas a la app
+const LIMIT = 1000; // 🔥 trae muchas sims de Claro
+const MAX_RETURN = 100; // 🔥 limita lo que mandas a la app
 
 // 🔹 HEADERS
 function claroHeaders() {
   return {
     Authorization: `Bearer ${TOKEN}`,
     "Content-Type": "application/json",
-  };
-}
-
-// 🔹 FORMATEO DE ERRORES
-function formatError(error) {
-  return error?.response?.data || error?.message || "Error desconocido";
-}
-
-// 🔹 NORMALIZAR DATOS
-function normalizeDevice(item = {}) {
-  return {
-    iccid: item.iccid || "",
-    msisdn: item.msisdn || "",
-    imsi: item.imsi || "",
-    estado: item.state || item.status || "N/A",
-    plan:
-      item.servicePlan?.servicePlanName ||
-      item.plan ||
-      "N/A",
   };
 }
 
@@ -61,14 +40,27 @@ async function claroRequest(config) {
   });
 }
 
-// 🔥 OBTENER LISTA DE SIMS (LIMITADO)
+// 🔹 NORMALIZAR DATOS
+function normalizeDevice(item = {}) {
+  return {
+    iccid: item.iccid || "",
+    msisdn: item.msisdn || "",
+    estado: item.state || item.status || "N/A",
+    plan:
+      item.servicePlan?.servicePlanName ||
+      item.plan ||
+      "N/A",
+  };
+}
+
+// 🔥 OBTENER TODAS LAS SIMS (como Postman)
 async function fetchAllDevices() {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/device/list`,
     data: {
       start: 0,
-      length: LIMIT, // 🔥 igual que Postman
+      length: LIMIT,
     },
   });
 
@@ -91,13 +83,14 @@ async function fetchAllDevices() {
   };
 }
 
-// 🔥 BUSCAR SIM POR ICCID (CORRECTO SEGÚN PDF)
+// 🔥 BUSCAR SIM POR ICCID (CORREGIDO)
 async function fetchSimByIccid(iccid) {
   const response = await claroRequest({
     method: "post",
-    url: `${BASE_URL}/gcapi/get/sims`,
+    url: `${BASE_URL}/gcapi/device/list`,
     data: {
-      iccids: [iccid], // 🔥 IMPORTANTE
+      start: 0,
+      length: LIMIT,
     },
   });
 
@@ -107,12 +100,14 @@ async function fetchSimByIccid(iccid) {
     );
   }
 
-  const items =
-    response.data?.devices ||
-    response.data?.data ||
-    [];
+  const items = response.data?.data || [];
 
-  return items[0] || null;
+  const found = items.find(
+    (item) =>
+      String(item.iccid).trim() === String(iccid).trim()
+  );
+
+  return found ? normalizeDevice(found) : null;
 }
 
 // 🔹 RUTAS
@@ -125,21 +120,21 @@ app.get("/api/test", (req, res) => {
   res.json({ ok: true });
 });
 
-// 🔥 LISTA DE SIMS (limitada para no romper Kodular)
+// 🔥 OBTENER SIMS
 app.get("/api/devices", async (req, res) => {
   try {
     const result = await fetchAllDevices();
     res.json(result);
   } catch (error) {
-    console.error("ERROR DEVICES:", formatError(error));
+    console.error("ERROR DEVICES:", error.message);
     res.status(500).json({
       ok: false,
-      error: formatError(error),
+      error: error.message,
     });
   }
 });
 
-// 🔥 BUSCAR SIM POR ICCID
+// 🔥 BUSCAR SIM
 app.get("/api/device/:iccid", async (req, res) => {
   try {
     const item = await fetchSimByIccid(req.params.iccid);
@@ -151,61 +146,12 @@ app.get("/api/device/:iccid", async (req, res) => {
       });
     }
 
-    res.json(normalizeDevice(item));
+    res.json(item);
   } catch (error) {
-    console.error("ERROR BUSCAR:", formatError(error));
+    console.error("ERROR BUSCAR:", error.message);
     res.status(500).json({
       ok: false,
-      error: formatError(error),
-    });
-  }
-});
-
-// 🔥 CAMBIAR ESTADO DE SIM (EXTRA PRO)
-app.put("/api/device/state", async (req, res) => {
-  try {
-    const { iccid, state, reason } = req.body;
-
-    if (!iccid || !state) {
-      return res.status(400).json({
-        ok: false,
-        error: "Debes enviar iccid y state",
-      });
-    }
-
-    const sim = await fetchSimByIccid(iccid);
-
-    if (!sim) {
-      return res.status(404).json({
-        ok: false,
-        error: "SIM no encontrada",
-      });
-    }
-
-    const response = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/changeState`,
-      data: {
-        imsi: sim.imsi,
-        newState: state,
-        reason: reason || "Cambio desde app",
-      },
-    });
-
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(JSON.stringify(response.data));
-    }
-
-    res.json({
-      ok: true,
-      mensaje: "Estado cambiado correctamente",
-      respuesta: response.data,
-    });
-  } catch (error) {
-    console.error("ERROR ESTADO:", formatError(error));
-    res.status(500).json({
-      ok: false,
-      error: formatError(error),
+      error: error.message,
     });
   }
 });
