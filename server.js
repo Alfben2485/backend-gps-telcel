@@ -45,12 +45,13 @@ function normalizeDevice(item = {}) {
     imsi: item.imsi || item.imsiNumber || "",
     estado: item.state || item.status || "N/A",
 
-    // 🔥 PRIORIDAD CORRECTA DEL PLAN
+    // 🔥 PLAN REAL DEL DISPOSITIVO
     plan:
       item.ratePlanName ||
+      item.offerName ||
+      item.productName ||
       item.devicePlan ||
       item.servicePlan?.servicePlanName ||
-      item.plan ||
       "N/A",
   };
 }
@@ -76,7 +77,7 @@ async function fetchTotalSims() {
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔥 BUSCAR SIM (PAGINADO REAL)
+// 🔥 BUSCAR SIM (PAGINADO)
 async function fetchSimByIccid(iccid) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
@@ -106,7 +107,7 @@ async function fetchSimByIccid(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO CORRECTO (IMSI + DETECCIÓN)
+// 🔥 CONSUMO (USANDO IMSI)
 async function fetchUsage(imsi) {
   const response = await claroRequest({
     method: "post",
