@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q"; // 🔥
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NTYyOTQ1MzYzLCJ1c2VySWQiOjU3M30.y3MlkLoS5gblLXXiQ9BE47mDeXdySNOmhIwQurM_Spf63Brb8-BPtjpdzoEmlhrUriDcbauyIyG-GWwtW52G3Q"; // 🔥 IMPORTANTE
 
 // 🔹 HEADERS
 function claroHeaders() {
@@ -37,7 +37,7 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 NORMALIZAR SIM
+// 🔹 NORMALIZAR
 function normalizeDevice(item = {}) {
   return {
     iccid: item.iccid || "",
@@ -50,14 +50,14 @@ function normalizeDevice(item = {}) {
   };
 }
 
-// 🔹 TOTAL DE SIMS 🔥
+// 🔥 TOTAL DE SIMS
 async function fetchTotalSims() {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/device/list`,
     data: {
       start: 0,
-      length: 1, // 🔥 solo pedimos 1 para obtener el total
+      length: 1,
     },
   });
 
@@ -70,25 +70,48 @@ async function fetchTotalSims() {
   return response.data?.recordsFiltered || 0;
 }
 
-// 🔹 BUSCAR SIM
+// 🔥 BUSCAR SIM (PAGINADO REAL)
 async function fetchSimByIccid(iccid) {
-  const response = await claroRequest({
-    method: "post",
-    url: `${BASE_URL}/gcapi/get/sims`,
-    data: { iccid },
-  });
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 50;
 
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(
-      `Error ${response.status}: ${JSON.stringify(response.data)}`
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: {
+        start: page * PAGE_SIZE,
+        length: PAGE_SIZE,
+      },
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(
+        `Error ${response.status}: ${JSON.stringify(response.data)}`
+      );
+    }
+
+    const items = response.data?.data || [];
+
+    console.log(`🔍 Página ${page} -> ${items.length}`);
+
+    const found = items.find(
+      (item) =>
+        String(item.iccid).trim() === String(iccid).trim()
     );
+
+    if (found) {
+      console.log("✅ SIM encontrada en página:", page);
+      return found;
+    }
+
+    if (items.length < PAGE_SIZE) break;
   }
 
-  const items = response.data?.data || [];
-  return items[0] || null;
+  return null;
 }
 
-// 🔹 CONSUMO
+// 🔥 CONSUMO
 async function fetchUsage(iccid) {
   const response = await claroRequest({
     method: "post",
@@ -123,35 +146,33 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔥 🔥 ENDPOINT COMPLETO (SIM + CONSUMO + TOTAL)
+// 🔥 🔥 ENDPOINT COMPLETO
 app.get("/api/device/full/:iccid", async (req, res) => {
   try {
     const { iccid } = req.params;
 
-    // 🔥 ejecutar en paralelo (más rápido)
-    const [sim, usage, totalSims] = await Promise.all([
+    const [simRaw, usage, totalSims] = await Promise.all([
       fetchSimByIccid(iccid),
       fetchUsage(iccid),
       fetchTotalSims(),
     ]);
 
-    if (!sim) {
+    if (!simRaw) {
       return res.status(404).json({
         ok: false,
         error: "SIM no encontrada",
       });
     }
 
+    const sim = normalizeDevice(simRaw);
+
     res.json({
       ok: true,
       totalSims,
       iccid: sim.iccid,
       msisdn: sim.msisdn,
-      estado: sim.state || sim.status,
-      plan:
-        sim.servicePlan?.servicePlanName ||
-        sim.plan ||
-        "N/A",
+      estado: sim.estado,
+      plan: sim.plan,
       consumoMB: usage.totalMB,
       consumoKB: usage.totalKB,
     });
@@ -165,7 +186,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
-// 🔹 START
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
