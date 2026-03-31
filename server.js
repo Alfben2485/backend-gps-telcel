@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0NzE2MjM5MTM3LCJ1c2VySWQiOjU3M30.gXwIck0sVmRGSjWa2pCidp0BNIJw3cJlRqpVUM-KPiKrewCifwHvDQKaNVfYKAExlogV24gJHlIwGkXF1XVj_Q";
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0OTgyNzgzNTI4LCJ1c2VySWQiOjU3M30.kGtW9zgJ4MmL1B4QCYYDGGjpCLfVU-IqT9nBPhYDEjgUsaCAaIDlZWeQcQDa5xHRzGt_GiZoq_zO5xX-QsyxDg";
 
 // 🔹 HEADERS
 function claroHeaders() {
@@ -52,8 +52,8 @@ async function getTotalSims() {
   }
 }
 
-// 🔥 BUSCAR SIM REAL (RECORRE TODAS)
-async function fetchSim(iccid) {
+// 🔥 BUSCAR SIM (ICCID o MSISDN)
+async function fetchSim(value) {
   const PAGE_SIZE = 500;
   const MAX_PAGES = 50;
 
@@ -71,11 +71,12 @@ async function fetchSim(iccid) {
 
     const found = items.find(
       (item) =>
-        String(item.iccid).trim() === String(iccid).trim()
+        String(item.iccid).trim() === String(value).trim() ||
+        String(item.msisdn).trim() === String(value).trim()
     );
 
     if (found) {
-      console.log("✅ SIM ENCONTRADA:", found.iccid);
+      console.log("✅ ENCONTRADO:", found.iccid);
       return found;
     }
 
@@ -85,10 +86,10 @@ async function fetchSim(iccid) {
   return null;
 }
 
-// 🔥 CONSUMO (DOBLE ENDPOINT COMO CLARO)
+// 🔥 CONSUMO (DOBLE ENDPOINT)
 async function fetchUsageSafe(iccid) {
 
-  // 🔹 1. PRIMER INTENTO
+  // 🔹 INTENTO 1
   try {
     const response = await claroRequest({
       method: "post",
@@ -115,7 +116,7 @@ async function fetchUsageSafe(iccid) {
     console.log("⚠️ intento 1 falló");
   }
 
-  // 🔹 2. SEGUNDO INTENTO (🔥 CLAVE)
+  // 🔹 INTENTO 2
   try {
     const response = await claroRequest({
       method: "post",
@@ -142,21 +143,20 @@ async function fetchUsageSafe(iccid) {
     console.log("⚠️ intento 2 falló");
   }
 
-  // 🔹 3. FALLBACK FINAL
   return {
     consumoKB: 0,
     consumoMB: 0,
   };
 }
 
-// 🔥 ENDPOINT FINAL
-app.get("/api/device/full/:iccid", async (req, res) => {
+// 🔥 🔍 BUSCAR SIM (ICCID o MSISDN)
+app.get("/api/device/full/:value", async (req, res) => {
   try {
-    const iccid = req.params.iccid;
+    const value = req.params.value;
 
-    console.log("🔍 BUSCANDO ICCID:", iccid);
+    console.log("🔍 BUSCANDO:", value);
 
-    const sim = await fetchSim(iccid);
+    const sim = await fetchSim(value);
 
     if (!sim) {
       return res.json({
@@ -165,7 +165,7 @@ app.get("/api/device/full/:iccid", async (req, res) => {
       });
     }
 
-    const consumo = await fetchUsageSafe(iccid);
+    const consumo = await fetchUsageSafe(sim.iccid);
     const totalSims = await getTotalSims();
 
     res.json({
@@ -193,12 +193,44 @@ app.get("/api/device/full/:iccid", async (req, res) => {
   }
 });
 
+// 🔥 🔁 SOFT RESET
+app.post("/api/device/reset/:iccid", async (req, res) => {
+  try {
+    const iccid = req.params.iccid;
+
+    console.log("🔁 RESET:", iccid);
+
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/command`,
+      data: {
+        iccid: iccid,
+        command: "RESET",
+      },
+    });
+
+    res.json({
+      ok: true,
+      message: "Comando enviado correctamente",
+      data: response.data,
+    });
+
+  } catch (error) {
+    console.error("❌ ERROR RESET:", error.message);
+
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
 // 🔹 ROOT
 app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔹 START SERVER
+// 🔹 START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
