@@ -198,7 +198,7 @@ app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const value = req.params.value;
 
-    console.log("🔁 RESET:", value);
+    console.log("🔁 RESET solicitado:", value);
 
     const sim = await fetchSim(value);
 
@@ -209,45 +209,52 @@ app.post("/api/device/reset/:value", async (req, res) => {
       });
     }
 
-    const imsi = sim.imsi;
-
-    if (!imsi) {
-      return res.json({
-        ok: false,
-        error: "IMSI no disponible",
+    // 🔥 INTENTO 1: ICCID
+    try {
+      const response = await claroRequest({
+        method: "post",
+        url: `${BASE_URL}/gcapi/sim/reset`,
+        data: {
+          iccid: sim.iccid,
+        },
       });
+
+      return res.json({
+        ok: true,
+        message: "Reset aplicado correctamente (ICCID)",
+        data: response.data,
+      });
+
+    } catch (e) {
+      console.log("⚠️ intento ICCID falló");
     }
 
-    // 🔹 SUSPENDER
-    await claroRequest({
-      method: "put",
-      url: `${BASE_URL}/gcapi/device/changeState`,
-      data: {
-        imsi: [imsi],
-        newState: "Suspended",
-      },
-    });
+    // 🔥 INTENTO 2: IMSI
+    if (sim.imsi) {
+      try {
+        const response = await claroRequest({
+          method: "post",
+          url: `${BASE_URL}/gcapi/sim/reset`,
+          data: {
+            imsi: sim.imsi,
+          },
+        });
 
-    // ⏱️ pequeña pausa
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+        return res.json({
+          ok: true,
+          message: "Reset aplicado correctamente (IMSI)",
+          data: response.data,
+        });
 
-    // 🔹 ACTIVAR
-    const response = await claroRequest({
-      method: "put",
-      url: `${BASE_URL}/gcapi/device/changeState`,
-      data: {
-        imsi: [imsi],
-        newState: "Activated",
-      },
-    });
+      } catch (e) {
+        console.log("⚠️ intento IMSI falló");
+      }
+    }
 
+    // ❌ FALLA TOTAL
     res.json({
-      ok: true,
-      message: "Soft Reset aplicado correctamente",
-      iccid: sim.iccid,
-      msisdn: sim.msisdn,
-      estadoFinal: "Activated",
-      data: response.data,
+      ok: false,
+      error: "No se pudo aplicar reset",
     });
 
   } catch (error) {
@@ -265,7 +272,7 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔹 START
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
