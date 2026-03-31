@@ -149,7 +149,7 @@ async function fetchUsageSafe(iccid) {
   };
 }
 
-// 🔥 🔍 BUSCAR SIM (ICCID o MSISDN)
+// 🔍 ENDPOINT BUSCAR
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const value = req.params.value;
@@ -193,25 +193,60 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔥 🔁 SOFT RESET
-app.post("/api/device/reset/:iccid", async (req, res) => {
+// 🔁 RESET REAL (ICCID o MSISDN)
+app.post("/api/device/reset/:value", async (req, res) => {
   try {
-    const iccid = req.params.iccid;
+    const value = req.params.value;
 
-    console.log("🔁 RESET:", iccid);
+    console.log("🔁 RESET:", value);
 
-    const response = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/command`,
+    const sim = await fetchSim(value);
+
+    if (!sim) {
+      return res.json({
+        ok: false,
+        error: "SIM no encontrada",
+      });
+    }
+
+    const imsi = sim.imsi;
+
+    if (!imsi) {
+      return res.json({
+        ok: false,
+        error: "IMSI no disponible",
+      });
+    }
+
+    // 🔹 SUSPENDER
+    await claroRequest({
+      method: "put",
+      url: `${BASE_URL}/gcapi/device/changeState`,
       data: {
-        iccid: iccid,
-        command: "RESET",
+        imsi: [imsi],
+        newState: "Suspended",
+      },
+    });
+
+    // ⏱️ pequeña pausa
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    // 🔹 ACTIVAR
+    const response = await claroRequest({
+      method: "put",
+      url: `${BASE_URL}/gcapi/device/changeState`,
+      data: {
+        imsi: [imsi],
+        newState: "Activated",
       },
     });
 
     res.json({
       ok: true,
-      message: "Comando enviado correctamente",
+      message: "Soft Reset aplicado correctamente",
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      estadoFinal: "Activated",
       data: response.data,
     });
 
