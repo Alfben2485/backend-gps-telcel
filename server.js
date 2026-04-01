@@ -112,29 +112,44 @@ async function fetchSim(value) {
   return null;
 }
 
-// 🔥 CONSUMO
+// 🔥 CONSUMO REAL (ENDPOINT CORRECTO)
 async function fetchUsageSafe(iccid) {
   try {
     const response = await claroRequest({
       method: "post",
-      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-      data: { iccid },
+      url: `${BASE_URL}/gcapi/device/dataUsage`,
+      data: {
+        iccid: iccid,
+      },
     });
 
-    const data = response.data?.data || {};
+    const data = response.data?.data || response.data || {};
 
-    const totalKB =
-      Number(data.totalKB) ||
-      Number(data.usageKB) ||
-      Number(data.totalBytes) / 1024 ||
+    console.log("📊 DATA USAGE RAW:", data);
+
+    let totalBytes =
+      data.totalBytes ||
+      data.usageBytes ||
+      data.totalData ||
+      data.dataUsage ||
+      (data.totalKB ? data.totalKB * 1024 : 0) ||
       0;
 
+    const totalKB = totalBytes / 1024;
+    const totalMB = totalKB / 1024;
+
     return {
-      consumoKB: totalKB,
-      consumoMB: Number((totalKB / 1024).toFixed(2)),
+      consumoKB: Number(totalKB.toFixed(2)),
+      consumoMB: Number(totalMB.toFixed(2)),
     };
-  } catch {
-    return { consumoKB: 0, consumoMB: 0 };
+
+  } catch (error) {
+    console.log("❌ ERROR CONSUMO:", error.message);
+
+    return {
+      consumoKB: 0,
+      consumoMB: 0,
+    };
   }
 }
 
@@ -163,7 +178,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET CON IMSI (CORREGIDO)
+// 🔁 RESET CON IMSI
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -208,12 +223,12 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
-// ROOT
+// 🔹 ROOT
 app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// START
+// 🔹 START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
