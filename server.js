@@ -27,7 +27,7 @@ function claroHeaders() {
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
-    timeout: 20000, // 🔥 más rápido
+    timeout: 20000,
     validateStatus: () => true,
     ...config,
     headers: {
@@ -52,7 +52,7 @@ async function getTotalSims() {
   }
 }
 
-// 🔥 EXTRAER IMSI
+// 🔹 EXTRAER IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -63,42 +63,84 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 NUEVA BÚSQUEDA RÁPIDA
+// 🔥 BUSQUEDA HIBRIDA (RÁPIDA + SEGURA)
 async function fetchSim(value) {
+
+  // 🔹 INTENTO 1 (rápido)
   try {
-    const response = await claroRequest({
+    const fast = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/get/sims`,
+      data: { iccid: value },
+    });
+
+    const items = fast.data?.data || [];
+
+    if (items.length > 0) {
+      const sim = items[0];
+      console.log("⚡ encontrado rápido");
+
+      return {
+        iccid: sim.iccid,
+        msisdn: sim.msisdn,
+        imsi: extractIMSI(sim),
+        estado: sim.state || sim.status || "N/A",
+        plan:
+          sim.ratePlanName ||
+          sim.servicePlan?.servicePlanName ||
+          sim.planName ||
+          "N/A",
+      };
+    }
+
+  } catch (e) {
+    console.log("⚠️ búsqueda rápida falló");
+  }
+
+  // 🔹 INTENTO 2 (fallback optimizado)
+  console.log("🔁 usando fallback...");
+
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 10; // 🔥 SOLO 10 páginas (rápido)
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const response = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
       data: {
-        searchValue: value, // 🔥 clave
+        start: page * PAGE_SIZE,
+        length: PAGE_SIZE,
       },
     });
 
     const items = response.data?.data || [];
 
-    if (!items.length) return null;
+    const found = items.find(
+      (item) =>
+        String(item.iccid).trim() === String(value).trim() ||
+        String(item.msisdn).trim() === String(value).trim()
+    );
 
-    const sim = items[0];
-    const imsi = extractIMSI(sim);
+    if (found) {
+      console.log("✅ encontrado en fallback");
 
-    console.log("✅ SIM encontrada rápido:", sim.iccid);
+      return {
+        iccid: found.iccid,
+        msisdn: found.msisdn,
+        imsi: extractIMSI(found),
+        estado: found.state || found.status || "N/A",
+        plan:
+          found.ratePlanName ||
+          found.servicePlan?.servicePlanName ||
+          found.planName ||
+          "N/A",
+      };
+    }
 
-    return {
-      iccid: sim.iccid,
-      msisdn: sim.msisdn,
-      imsi: imsi,
-      estado: sim.state || sim.status || "N/A",
-      plan:
-        sim.ratePlanName ||
-        sim.servicePlan?.servicePlanName ||
-        sim.planName ||
-        "N/A",
-    };
-
-  } catch (error) {
-    console.error("❌ ERROR BUSQUEDA:", error.message);
-    return null;
+    if (items.length < PAGE_SIZE) break;
   }
+
+  return null;
 }
 
 // 🔥 CONSUMO
@@ -111,6 +153,8 @@ async function fetchUsageSafe(iccid) {
     });
 
     const data = response.data?.data || response.data || {};
+
+    console.log("📊 USO RAW:", data);
 
     let totalBytes =
       data.totalBytes ||
