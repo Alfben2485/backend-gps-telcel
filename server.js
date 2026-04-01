@@ -63,84 +63,45 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSQUEDA HIBRIDA (RÁPIDA + SEGURA)
+// 🔥 BÚSQUEDA DIRECTA (RÁPIDA)
 async function fetchSim(value) {
-
-  // 🔹 INTENTO 1 (rápido)
   try {
-    const fast = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/get/sims`,
-      data: { iccid: value },
-    });
-
-    const items = fast.data?.data || [];
-
-    if (items.length > 0) {
-      const sim = items[0];
-      console.log("⚡ encontrado rápido");
-
-      return {
-        iccid: sim.iccid,
-        msisdn: sim.msisdn,
-        imsi: extractIMSI(sim),
-        estado: sim.state || sim.status || "N/A",
-        plan:
-          sim.ratePlanName ||
-          sim.servicePlan?.servicePlanName ||
-          sim.planName ||
-          "N/A",
-      };
-    }
-
-  } catch (e) {
-    console.log("⚠️ búsqueda rápida falló");
-  }
-
-  // 🔹 INTENTO 2 (fallback optimizado)
-  console.log("🔁 usando fallback...");
-
-  const PAGE_SIZE = 500;
-  const MAX_PAGES = 10; // 🔥 SOLO 10 páginas (rápido)
-
-  for (let page = 0; page < MAX_PAGES; page++) {
     const response = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/device/list`,
       data: {
-        start: page * PAGE_SIZE,
-        length: PAGE_SIZE,
+        start: 0,
+        length: 1,
+        search: {
+          value: value, // 🔥 AQUÍ ESTÁ LA MAGIA
+        },
       },
     });
 
     const items = response.data?.data || [];
 
-    const found = items.find(
-      (item) =>
-        String(item.iccid).trim() === String(value).trim() ||
-        String(item.msisdn).trim() === String(value).trim()
-    );
+    if (!items.length) return null;
 
-    if (found) {
-      console.log("✅ encontrado en fallback");
+    const sim = items[0];
 
-      return {
-        iccid: found.iccid,
-        msisdn: found.msisdn,
-        imsi: extractIMSI(found),
-        estado: found.state || found.status || "N/A",
-        plan:
-          found.ratePlanName ||
-          found.servicePlan?.servicePlanName ||
-          found.planName ||
-          "N/A",
-      };
-    }
+    console.log("⚡ encontrado directo:", sim.iccid);
 
-    if (items.length < PAGE_SIZE) break;
+    return {
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      imsi: extractIMSI(sim),
+      estado: sim.state || sim.status || "N/A",
+      plan:
+        sim.ratePlanName ||
+        sim.servicePlan?.servicePlanName ||
+        sim.planName ||
+        "N/A",
+    };
+
+  } catch (error) {
+    console.error("❌ ERROR BUSQUEDA:", error.message);
+    return null;
   }
-
-  return null;
 }
 
 // 🔥 CONSUMO
