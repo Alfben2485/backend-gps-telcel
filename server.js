@@ -27,7 +27,7 @@ function claroHeaders() {
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
-    timeout: 60000,
+    timeout: 20000, // 🔥 más rápido
     validateStatus: () => true,
     ...config,
     headers: {
@@ -52,7 +52,7 @@ async function getTotalSims() {
   }
 }
 
-// 🔥 EXTRAER IMSI (ROBUSTO)
+// 🔥 EXTRAER IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -63,69 +63,54 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSCAR SIM
+// 🔥 NUEVA BÚSQUEDA RÁPIDA
 async function fetchSim(value) {
-  const PAGE_SIZE = 500;
-  const MAX_PAGES = 50;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
+  try {
     const response = await claroRequest({
       method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
+      url: `${BASE_URL}/gcapi/get/sims`,
       data: {
-        start: page * PAGE_SIZE,
-        length: PAGE_SIZE,
+        searchValue: value, // 🔥 clave
       },
     });
 
     const items = response.data?.data || [];
 
-    const found = items.find(
-      (item) =>
-        String(item.iccid).trim() === String(value).trim() ||
-        String(item.msisdn).trim() === String(value).trim()
-    );
+    if (!items.length) return null;
 
-    if (found) {
-      const imsi = extractIMSI(found);
+    const sim = items[0];
+    const imsi = extractIMSI(sim);
 
-      console.log("✅ SIM encontrada:");
-      console.log("ICCID:", found.iccid);
-      console.log("IMSI:", imsi);
+    console.log("✅ SIM encontrada rápido:", sim.iccid);
 
-      return {
-        iccid: found.iccid,
-        msisdn: found.msisdn,
-        imsi: imsi,
-        estado: found.state || found.status || "N/A",
-        plan:
-          found.ratePlanName ||
-          found.servicePlan?.servicePlanName ||
-          found.planName ||
-          "N/A",
-      };
-    }
+    return {
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      imsi: imsi,
+      estado: sim.state || sim.status || "N/A",
+      plan:
+        sim.ratePlanName ||
+        sim.servicePlan?.servicePlanName ||
+        sim.planName ||
+        "N/A",
+    };
 
-    if (items.length < PAGE_SIZE) break;
+  } catch (error) {
+    console.error("❌ ERROR BUSQUEDA:", error.message);
+    return null;
   }
-
-  return null;
 }
 
-// 🔥 CONSUMO REAL (ENDPOINT CORRECTO)
+// 🔥 CONSUMO
 async function fetchUsageSafe(iccid) {
   try {
     const response = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/device/dataUsage`,
-      data: {
-        iccid: iccid,
-      },
+      data: { iccid },
     });
 
     const data = response.data?.data || response.data || {};
-
-    console.log("📊 DATA USAGE RAW:", data);
 
     let totalBytes =
       data.totalBytes ||
@@ -135,21 +120,13 @@ async function fetchUsageSafe(iccid) {
       (data.totalKB ? data.totalKB * 1024 : 0) ||
       0;
 
-    const totalKB = totalBytes / 1024;
-    const totalMB = totalKB / 1024;
-
     return {
-      consumoKB: Number(totalKB.toFixed(2)),
-      consumoMB: Number(totalMB.toFixed(2)),
+      consumoKB: Number((totalBytes / 1024).toFixed(2)),
+      consumoMB: Number((totalBytes / 1024 / 1024).toFixed(2)),
     };
 
-  } catch (error) {
-    console.log("❌ ERROR CONSUMO:", error.message);
-
-    return {
-      consumoKB: 0,
-      consumoMB: 0,
-    };
+  } catch {
+    return { consumoKB: 0, consumoMB: 0 };
   }
 }
 
@@ -178,7 +155,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET CON IMSI
+// 🔁 RESET
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -188,47 +165,33 @@ app.post("/api/device/reset/:value", async (req, res) => {
     }
 
     if (!sim.imsi) {
-      return res.json({
-        ok: false,
-        error: "IMSI no encontrado en la SIM",
-      });
+      return res.json({ ok: false, error: "IMSI no encontrado" });
     }
-
-    console.log("🔁 RESET usando IMSI:", sim.imsi);
 
     const response = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/sim/reset`,
-      data: {
-        imsi: sim.imsi,
-      },
+      data: { imsi: sim.imsi },
     });
 
     res.json({
       ok: true,
       message: "Reset aplicado correctamente",
-      iccid: sim.iccid,
-      msisdn: sim.msisdn,
-      imsi: sim.imsi,
+      ...sim,
       data: response.data,
     });
 
   } catch (error) {
-    console.error("❌ ERROR RESET:", error.message);
-
-    res.status(500).json({
-      ok: false,
-      error: error.message,
-    });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// 🔹 ROOT
+// ROOT
 app.get("/", (req, res) => {
   res.send("Servidor funcionando 🚀");
 });
 
-// 🔹 START
+// START
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
