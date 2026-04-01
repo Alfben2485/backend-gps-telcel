@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0OTgyNzgzNTI4LCJ1c2VySWQiOjU3M30.kGtW9zgJ4MmL1B4QCYYDGGjpCLfVU-IqT9nBPhYDEjgUsaCAaIDlZWeQcQDa5xHRzGt_GiZoq_zO5xX-QsyxDg";
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0OTgyNzgzNTI4LCJ1c2VySWQiOjU3M30.kGtW9zgJ4MmL1B4QCYYDGGjpCLfVU-IqT9nBPhYDEjgUsaCAaIDlZWeQcQDa5xHRzGt_GiZoq_zO5xX-QsyxDg"; // ⚠️ CAMBIA ESTO
 
 // 🔹 HEADERS
 function claroHeaders() {
@@ -23,11 +23,11 @@ function claroHeaders() {
   };
 }
 
-// 🔹 REQUEST BASE
+// 🔹 REQUEST BASE (más rápido)
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
-    timeout: 60000,
+    timeout: 15000, // 🔥 antes 60000
     validateStatus: () => true,
     ...config,
     headers: {
@@ -52,7 +52,7 @@ async function getTotalSims() {
   }
 }
 
-// 🔥 EXTRAER IMSI (ROBUSTO)
+// 🔥 EXTRAER IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -63,10 +63,10 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSCAR SIM
+// 🔥 BUSCAR SIM (OPTIMIZADO)
 async function fetchSim(value) {
   const PAGE_SIZE = 500;
-  const MAX_PAGES = 50;
+  const MAX_PAGES = 8; // 🔥 antes 50 (gran mejora)
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const response = await claroRequest({
@@ -89,9 +89,7 @@ async function fetchSim(value) {
     if (found) {
       const imsi = extractIMSI(found);
 
-      console.log("✅ SIM encontrada:");
-      console.log("ICCID:", found.iccid);
-      console.log("IMSI:", imsi);
+      console.log("✅ SIM encontrada:", found.iccid);
 
       return {
         iccid: found.iccid,
@@ -106,18 +104,22 @@ async function fetchSim(value) {
       };
     }
 
+    // 🔥 cortar si ya no hay más datos
     if (items.length < PAGE_SIZE) break;
   }
 
   return null;
 }
 
-// 🔥 CONSUMO
+// 🔥 CONSUMO (más rápido)
 async function fetchUsageSafe(iccid) {
   try {
-    const response = await claroRequest({
+    const response = await axios({
+      httpsAgent: agent,
+      timeout: 8000,
       method: "post",
       url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      headers: claroHeaders(),
       data: { iccid },
     });
 
@@ -138,7 +140,7 @@ async function fetchUsageSafe(iccid) {
   }
 }
 
-// 🔍 BUSCAR
+// 🔍 BUSCAR (OPTIMIZADO)
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -147,8 +149,11 @@ app.get("/api/device/full/:value", async (req, res) => {
       return res.json({ ok: false, error: "SIM no encontrada" });
     }
 
-    const consumo = await fetchUsageSafe(sim.iccid);
-    const totalSims = await getTotalSims();
+    // 🔥 en paralelo (más rápido)
+    const [consumo, totalSims] = await Promise.all([
+      fetchUsageSafe(sim.iccid),
+      getTotalSims(),
+    ]);
 
     res.json({
       ok: true,
@@ -163,7 +168,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET CON IMSI (CORREGIDO)
+// 🔁 RESET
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -178,8 +183,6 @@ app.post("/api/device/reset/:value", async (req, res) => {
         error: "IMSI no encontrado en la SIM",
       });
     }
-
-    console.log("🔁 RESET usando IMSI:", sim.imsi);
 
     const response = await claroRequest({
       method: "post",
@@ -199,8 +202,6 @@ app.post("/api/device/reset/:value", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ ERROR RESET:", error.message);
-
     res.status(500).json({
       ok: false,
       error: error.message,
