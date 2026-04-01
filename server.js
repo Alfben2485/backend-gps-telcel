@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc0OTgyNzgzNTI4LCJ1c2VySWQiOjU3M30.kGtW9zgJ4MmL1B4QCYYDGGjpCLfVU-IqT9nBPhYDEjgUsaCAaIDlZWeQcQDa5xHRzGt_GiZoq_zO5xX-QsyxDg"; // ⚠️ CAMBIA ESTO
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc1MDY5NzI0ODkwLCJ1c2VySWQiOjU3M30.eEK9bdYPn2xrR-f_LgjAj4R_jyy4Szd248NRCmtX_sn0el4YrOUzeUvbWBuXoaS-RuwJpCUHyJDwCcpyqgAPyw"; // ⚠️ CAMBIA ESTO
 
 // 🔹 HEADERS
 function claroHeaders() {
