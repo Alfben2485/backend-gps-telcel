@@ -37,25 +37,14 @@ async function claroRequest(config) {
   });
 }
 
-// IMSI
-function extractIMSI(item) {
-  return (
-    item.imsi ||
-    item.subscription?.imsi ||
-    item.sim?.imsi ||
-    item.deviceInfo?.imsi ||
-    null
-  );
-}
-
-// 🔍 BUSQUEDA RAPIDA
+// 🔍 BUSQUEDA (RÁPIDA Y FUNCIONAL)
 async function fetchSim(value) {
   const response = await claroRequest({
     method: "post",
     url: `${BASE_URL}/gcapi/device/list`,
     data: {
       start: 0,
-      length: 10,
+      length: 50,
       search: { value },
     },
   });
@@ -73,77 +62,71 @@ async function fetchSim(value) {
   return {
     iccid: found.iccid,
     msisdn: found.msisdn,
-    imsi: extractIMSI(found),
+    imsi:
+      found.imsi ||
+      found.subscription?.imsi ||
+      found.sim?.imsi ||
+      null,
     estado: found.state || found.status || "N/A",
+
+    // 🔥 PLAN REAL DESDE LIST (el único que sí funciona en tu cuenta)
+    plan:
+      found.servicePlan?.servicePlanName ||
+      found.ratePlanName ||
+      found.planName ||
+      "N/A",
   };
 }
 
-// 🔥 PLAN REAL CORRECTO
-async function fetchPlan(iccid) {
-  try {
-    const r = await axios({
-      httpsAgent: agent,
-      timeout: 8000,
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/detail`,
-      headers: claroHeaders(),
-      data: { iccid },
-    });
-
-    const d = r.data?.data || {};
-
-    console.log("📦 PLAN RAW:", d);
-
-    return (
-      d.ratePlanName ||
-      d.devicePlanName ||
-      d.offerName ||
-      d.productName ||
-      d.tariffName ||
-      d.planName ||
-      "N/A"
-    );
-
-  } catch {
-    return "N/A";
-  }
-}
-
-// 🔥 CONSUMO REAL CORRECTO
+// 🔥 CONSUMO CORRECTO
 async function fetchUsage(iccid) {
   try {
     const r = await axios({
       httpsAgent: agent,
       timeout: 8000,
       method: "post",
-      url: `${BASE_URL}/gcapi/device/dataUsage`,
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
       headers: claroHeaders(),
       data: { iccid },
     });
 
+    console.log("📊 RAW USAGE:", r.data);
+
     const d = r.data?.data || r.data || {};
 
-    console.log("📊 CONSUMO RAW:", d);
-
-    let bytes =
-      d.totalBytes ||
-      d.usageBytes ||
-      d.totalData ||
-      d.dataUsage ||
-      (d.totalKB ? d.totalKB * 1024 : 0) ||
+    let totalKB =
+      Number(d.totalKB) ||
+      Number(d.usageKB) ||
+      (Number(d.totalBytes) / 1024) ||
       0;
 
     return {
-      consumoKB: Number((bytes / 1024).toFixed(2)),
-      consumoMB: Number((bytes / 1024 / 1024).toFixed(2)),
+      consumoKB: totalKB,
+      consumoMB: Number((totalKB / 1024).toFixed(2)),
     };
 
-  } catch {
+  } catch (e) {
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoKB: 0, consumoMB: 0 };
   }
 }
 
-// 🔍 ENDPOINT PRINCIPAL
+// 🔢 TOTAL SIMS
+async function getTotalSims() {
+  try {
+    const r = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: { start: 0, length: 1 },
+    });
+
+    return r.data?.recordsFiltered || r.data?.recordsTotal || 0;
+  } catch {
+    return 0;
+  }
+}
+
+// 🔍 ENDPOINT
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -152,21 +135,21 @@ app.get("/api/device/full/:value", async (req, res) => {
       return res.json({ ok: false, error: "SIM no encontrada" });
     }
 
-    const [plan, consumo] = await Promise.all([
-      fetchPlan(sim.iccid),
+    const [consumo, totalSims] = await Promise.all([
       fetchUsage(sim.iccid),
+      getTotalSims(),
     ]);
 
     res.json({
       ok: true,
+      totalSims,
       ...sim,
-      plan,
       consumoKB: consumo.consumoKB,
       consumoMB: consumo.consumoMB,
     });
 
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
