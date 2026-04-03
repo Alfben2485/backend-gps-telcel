@@ -37,6 +37,28 @@ async function claroRequest(config) {
   });
 }
 
+// 🔹 FECHAS (27 → 25)
+function getBillingDates() {
+  const now = new Date();
+
+  let start, end;
+
+  if (now.getDate() >= 27) {
+    start = new Date(now.getFullYear(), now.getMonth(), 27);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
+    end = new Date(now.getFullYear(), now.getMonth(), 25);
+  }
+
+  const format = (d) => d.toISOString().split("T")[0];
+
+  return {
+    startDate: format(start),
+    endDate: format(end),
+  };
+}
+
 // TOTAL SIMS
 async function getTotalSims() {
   try {
@@ -45,7 +67,6 @@ async function getTotalSims() {
       url: `${BASE_URL}/gcapi/device/list`,
       data: { start: 0, length: 1 },
     });
-
     return r.data?.recordsFiltered || 0;
   } catch {
     return 0;
@@ -106,7 +127,6 @@ async function getSimExtraData(sim) {
       url: `${BASE_URL}/gcapi/get/sims`,
       data: {
         msisdn: sim.msisdn,
-        iccid: sim.iccid,
       },
     });
 
@@ -126,45 +146,43 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO REAL (FIX FINAL)
-async function fetchUsage(iccid) {
+// 🔥 CONSUMO REAL FINAL
+async function fetchUsage(imsi) {
   try {
-    if (!iccid) return { consumoMB: 0 };
+    if (!imsi) return { consumoMB: 0 };
+
+    const { startDate, endDate } = getBillingDates();
+
+    console.log("📅 RANGO:", startDate, endDate);
 
     const r = await claroRequest({
       method: "post",
-      url: `${BASE_URL}/gcapi/sim/bundleDetails`,
+      url: `${BASE_URL}/gcapi/simUplink/usage`,
       data: {
-        iccid: iccid,
-        type: "DATA", // 🔥 CLAVE
+        imsi: imsi,
+        startDate,
+        endDate,
       },
     });
 
-    console.log("📊 BUNDLE:", JSON.stringify(r.data));
+    console.log("📊 UPLINK:", JSON.stringify(r.data));
 
-    const bundles = r.data?.bundles || [];
+    const list = r.data?.object || [];
 
-    let used = 0;
+    let total = 0;
 
-    bundles.forEach((b) => {
-      used += Number(
-        b.usedVolume ||
-        b.used ||
-        b.consumedVolume ||
-        0
-      );
+    list.forEach((d) => {
+      total += Number(d["totalBytes(MB)"] || 0);
     });
 
-    const consumoMB = used / 1024;
-
-    console.log("📊 CONSUMO FINAL:", consumoMB);
+    console.log("📊 CONSUMO TOTAL:", total);
 
     return {
-      consumoMB: Number(consumoMB.toFixed(2)),
+      consumoMB: Number(total.toFixed(2)),
     };
 
   } catch (e) {
-    console.log("❌ ERROR:", e.message);
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
@@ -177,10 +195,11 @@ app.get("/api/device/full/:value", async (req, res) => {
 
     const extra = await getSimExtraData(sim);
 
+    const imsi = extra.imsi || sim.imsi;
     const plan = extra.plan || "N/A";
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsage(sim.iccid),
+      fetchUsage(imsi),
       getTotalSims(),
     ]);
 
