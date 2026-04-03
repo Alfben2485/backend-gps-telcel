@@ -100,23 +100,31 @@ async function fetchSim(value) {
 }
 
 //
-// 🔥 EXTRA DATA (IMSI + PLAN)
+// 🔥 EXTRA DATA (IMSI + PLAN) → CORREGIDO
 //
 async function getSimExtraData(sim) {
   try {
+    const body = {};
+
+    if (sim.msisdn) body.msisdn = sim.msisdn;
+    if (sim.iccid) body.iccid = sim.iccid;
+
     const r = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/get/sims`,
-      data: {
-        msisdn: sim.msisdn,
-      },
+      data: body,
     });
+
+    console.log("📦 RESPUESTA get/sims:", JSON.stringify(r.data));
 
     const devices = r.data?.devices || [];
 
+    if (!devices.length) return {};
+
     const device = devices.find(
       (d) =>
-        String(d.iccid).trim() === String(sim.iccid).trim()
+        String(d.iccid).trim() === String(sim.iccid).trim() ||
+        String(d.msisdn).trim() === String(sim.msisdn).trim()
     );
 
     if (!device) return {};
@@ -157,7 +165,7 @@ function getDateRange() {
 }
 
 //
-// 🔥 CONSUMO (FALLBACK REAL)
+// 🔥 CONSUMO (FALLBACK)
 //
 async function fetchUsage(imsi) {
   try {
@@ -201,20 +209,17 @@ async function fetchUsage(imsi) {
         }
 
         if (totalMB > 0) {
-          console.log("✅ CONSUMO ENCONTRADO:", totalMB);
           return {
             consumoMB: Number(totalMB.toFixed(2)),
           };
         }
 
-      } catch (e) {
-        console.log(`❌ ERROR EN ${ep}`);
-      }
+      } catch {}
     }
 
     return { consumoMB: 0 };
 
-  } catch (e) {
+  } catch {
     return { consumoMB: 0 };
   }
 }
@@ -253,26 +258,20 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (FUNCIONANDO)
+// 🔁 RESET (NO SE ROMPE)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
 
     if (!sim) {
-      return res.json({
-        ok: false,
-        error: "SIM no encontrada",
-      });
+      return res.json({ ok: false, error: "SIM no encontrada" });
     }
 
     const extra = await getSimExtraData(sim);
     const imsi = extra.imsi || sim.imsi;
 
     if (!imsi) {
-      return res.json({
-        ok: false,
-        error: "IMSI no encontrado",
-      });
+      return res.json({ ok: false, error: "IMSI no encontrado" });
     }
 
     const r = await claroRequest({
