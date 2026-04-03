@@ -27,7 +27,7 @@ function claroHeaders() {
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
-    timeout: 15000,
+    timeout: 20000,
     validateStatus: () => true,
     ...config,
     headers: {
@@ -97,25 +97,20 @@ async function fetchSim(value) {
   }
 }
 
-// EXTRA DATA (PLAN + IMSI)
+// EXTRA DATA (PLAN)
 async function getSimExtraData(sim) {
   try {
-    const body = {};
-    if (sim.msisdn) body.msisdn = sim.msisdn;
-    if (sim.iccid) body.iccid = sim.iccid;
-
     const r = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/get/sims`,
-      data: body,
+      data: {
+        msisdn: sim.msisdn,
+        iccid: sim.iccid,
+      },
     });
 
-    const devices = r.data?.devices || [];
-
-    const device = devices.find(
-      (d) =>
-        String(d.iccid).trim() === String(sim.iccid).trim() ||
-        String(d.msisdn).trim() === String(sim.msisdn).trim()
+    const device = (r.data?.devices || []).find(
+      (d) => d.iccid === sim.iccid
     );
 
     if (!device) return {};
@@ -130,52 +125,61 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO REAL (DEVICE DATA USAGE)
+// 🔥 CONSUMO REAL (BILLING)
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
 
     const r = await claroRequest({
       method: "post",
-      url: `${BASE_URL}/gcapi/device/dataUsage`,
+      url: `${BASE_URL}/gcapi/billing/detailed/usage`,
       data: {
         imsi: imsi,
+        startDate: "2020-01-01", // 🔥 amplio
+        endDate: new Date().toISOString().split("T")[0],
       },
     });
 
-    console.log("📊 DATA USAGE:", JSON.stringify(r.data));
+    console.log("📊 BILLING:", JSON.stringify(r.data));
 
-    const data =
+    const records =
       r.data?.data ||
+      r.data?.usage ||
       r.data?.object ||
-      r.data ||
-      {};
+      [];
 
-    // 🔥 detectar campo correcto
-    let totalMB =
-      Number(data.totalMB) ||
-      Number(data.usageMB) ||
-      Number(data.totalUsageMB) ||
-      Number(data.totalBytes) / (1024 * 1024) ||
-      0;
+    let totalBytes = 0;
 
-    console.log("📊 CONSUMO FINAL MB:", totalMB);
+    if (Array.isArray(records)) {
+      records.forEach((r) => {
+        totalBytes += Number(
+          r.totalBytes ||
+          r.bytes ||
+          r.usage ||
+          0
+        );
+      });
+    }
+
+    const totalMB = totalBytes / (1024 * 1024);
+
+    console.log("📊 CONSUMO MB FINAL:", totalMB);
 
     return {
       consumoMB: Number(totalMB.toFixed(2)),
     };
 
   } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
+    console.log("❌ ERROR BILLING:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// ENDPOINT PRINCIPAL
+// ENDPOINT
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
-    if (!sim) return res.json({ ok: false, error: "SIM no encontrada" });
+    if (!sim) return res.json({ ok: false });
 
     const extra = await getSimExtraData(sim);
 
@@ -197,8 +201,8 @@ app.get("/api/device/full/:value", async (req, res) => {
       consumoMB: consumo.consumoMB,
     });
 
-  } catch (e) {
-    res.status(500).json({ ok: false });
+  } catch {
+    res.json({ ok: false });
   }
 });
 
@@ -224,7 +228,6 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
-// START
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Servidor listo");
 });
