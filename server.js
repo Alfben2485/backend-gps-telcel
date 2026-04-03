@@ -15,11 +15,11 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc1MjQzNzc3NjI2LCJ1c2VySWQiOjU3M30.RMrthfrWTUjwKkWJR6fB5gZyJDVFgYJnIomTi_bc9qinjO7nuciP_f7Bc76mJ5LpgDaugAMKdI8xo6YZe7NV_g";
 
-// 🧠 CACHE (ULTRA CLAVE)
+// 🧠 CACHE
 const usageCache = new Map();
-const CACHE_TIME = 2 * 60 * 1000; // 2 minutos
+const CACHE_TIME = 2 * 60 * 1000;
 
-// HEADERS
+// 🔹 HEADERS
 function claroHeaders() {
   return {
     Authorization: `Bearer ${TOKEN}`,
@@ -27,7 +27,7 @@ function claroHeaders() {
   };
 }
 
-// REQUEST BASE
+// 🔹 REQUEST BASE
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
@@ -41,7 +41,7 @@ async function claroRequest(config) {
   });
 }
 
-// TOTAL SIMS
+// 🔹 TOTAL SIMS
 async function getTotalSims() {
   try {
     const r = await claroRequest({
@@ -55,7 +55,7 @@ async function getTotalSims() {
   }
 }
 
-// IMSI
+// 🔹 IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -66,7 +66,7 @@ function extractIMSI(item) {
   );
 }
 
-// BUSCAR SIM
+// 🔍 BUSCAR SIM
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -101,7 +101,7 @@ async function fetchSim(value) {
   }
 }
 
-// PLAN
+// 🔥 PLAN + IMSI REAL
 async function getSimExtraData(sim) {
   try {
     const r = await claroRequest({
@@ -113,7 +113,7 @@ async function getSimExtraData(sim) {
     });
 
     const device = (r.data?.devices || []).find(
-      (d) => d.iccid === sim.iccid
+      (d) => String(d.iccid).trim() === String(sim.iccid).trim()
     );
 
     if (!device) return {};
@@ -128,12 +128,12 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO ULTRA RÁPIDO + CACHE
+// 🔥 CONSUMO REAL (UP + DOWN + CACHE + PARALELO)
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
 
-    // 🧠 CACHE CHECK
+    // CACHE
     const cached = usageCache.get(imsi);
     if (cached && Date.now() - cached.time < CACHE_TIME) {
       console.log("⚡ CACHE HIT");
@@ -167,53 +167,69 @@ async function fetchUsage(imsi) {
 
       const responses = await Promise.all(
         batch.map((date) =>
-          claroRequest({
-            method: "post",
-            url: `${BASE_URL}/gcapi/simUplink/usage`,
-            data: {
-              imsi,
-              startDate: date,
-              endDate: date,
-            },
-          }).catch(() => null)
+          Promise.all([
+            // UPLINK
+            claroRequest({
+              method: "post",
+              url: `${BASE_URL}/gcapi/simUplink/usage`,
+              data: { imsi, startDate: date, endDate: date },
+            }).catch(() => null),
+
+            // DOWNLINK
+            claroRequest({
+              method: "post",
+              url: `${BASE_URL}/gcapi/simDownlink/usage`,
+              data: { imsi, startDate: date, endDate: date },
+            }).catch(() => null),
+          ])
         )
       );
 
-      responses.forEach((r) => {
-        if (!r) return;
+      responses.forEach((pair) => {
+        if (!pair) return;
 
-        const list = r.data?.object || [];
+        const [up, down] = pair;
 
-        list.forEach((item) => {
-          total += Number(item["totalBytes(MB)"] || 0);
+        const upList = up?.data?.object || [];
+        const downList = down?.data?.object || [];
+
+        upList.forEach((i) => {
+          total += Number(i["totalBytes(MB)"] || 0);
+        });
+
+        downList.forEach((i) => {
+          total += Number(i["totalBytes(MB)"] || 0);
         });
       });
     }
 
     const result = {
-      consumoMB: Number(total.toFixed(2)),
+      consumoMB: Number(total.toFixed(3)),
     };
 
-    // 🧠 GUARDAR EN CACHE
     usageCache.set(imsi, {
       time: Date.now(),
       data: result,
     });
 
-    console.log("🚀 CONSUMO CALCULADO:", total);
+    console.log("🔥 CONSUMO TOTAL:", total);
 
     return result;
 
   } catch (e) {
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// ENDPOINT
+// 🔍 ENDPOINT
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
-    if (!sim) return res.json({ ok: false });
+
+    if (!sim) {
+      return res.json({ ok: false, error: "SIM no encontrada" });
+    }
 
     const extra = await getSimExtraData(sim);
 
@@ -235,19 +251,26 @@ app.get("/api/device/full/:value", async (req, res) => {
       consumoMB: consumo.consumoMB,
     });
 
-  } catch {
-    res.json({ ok: false });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// RESET (NO SE TOCA)
+// 🔁 RESET (FUNCIONANDO)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
-    if (!sim) return res.json({ ok: false });
+
+    if (!sim) {
+      return res.json({ ok: false, error: "SIM no encontrada" });
+    }
 
     const extra = await getSimExtraData(sim);
     const imsi = extra.imsi || sim.imsi;
+
+    if (!imsi) {
+      return res.json({ ok: false, error: "IMSI no encontrado" });
+    }
 
     const r = await claroRequest({
       method: "post",
@@ -255,13 +278,26 @@ app.post("/api/device/reset/:value", async (req, res) => {
       data: { imsi },
     });
 
-    res.json({ ok: true, data: r.data });
+    res.json({
+      ok: true,
+      message: "Reset aplicado correctamente",
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      imsi,
+      data: r.data,
+    });
 
-  } catch {
-    res.json({ ok: false });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
+// ROOT
+app.get("/", (req, res) => {
+  res.send("Servidor funcionando 🚀");
+});
+
+// START
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Servidor ultra rápido listo");
+  console.log("🚀 Servidor PRO listo");
 });
