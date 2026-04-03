@@ -63,7 +63,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSQUEDA (SE QUEDA IGUAL)
+// 🔥 BUSQUEDA (NO SE TOCA)
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -91,7 +91,7 @@ async function fetchSim(value) {
     return {
       iccid: found.iccid,
       msisdn: found.msisdn,
-      imsi: extractIMSI(found), // ⚠️ puede venir null
+      imsi: extractIMSI(found),
       estado: found.state || found.status || "N/A",
     };
 
@@ -102,7 +102,7 @@ async function fetchSim(value) {
 }
 
 //
-// 🔥 OBTENER DATOS REALES (PLAN + IMSI)
+// 🔥 OBTENER DATOS EXTRA (IMSI + PLAN)
 //
 async function getSimExtraData(sim) {
   try {
@@ -159,7 +159,7 @@ function getDateRange() {
 }
 
 //
-// 🔥 CONSUMO REAL (CORREGIDO)
+// 🔥 CONSUMO (ROBUSTO)
 //
 async function fetchUsage(imsi) {
   try {
@@ -177,24 +177,41 @@ async function fetchUsage(imsi) {
       },
     });
 
-    const data = r.data?.object || [];
+    console.log("📊 RAW USAGE:", JSON.stringify(r.data, null, 2));
+
+    const raw =
+      r.data?.object ||
+      r.data?.data ||
+      r.data?.usage ||
+      r.data?.result ||
+      [];
 
     let totalMB = 0;
 
-    data.forEach((d) => {
-      totalMB += Number(d["totalBytes(MB)"] || 0);
-    });
+    if (Array.isArray(raw)) {
+      raw.forEach((d) => {
+        totalMB += Number(d["totalBytes(MB)"] || d.totalBytes || 0);
+      });
+    } else if (typeof raw === "object") {
+      totalMB =
+        Number(raw["totalBytes(MB)"]) ||
+        Number(raw.totalBytes) ||
+        0;
+    }
+
+    console.log("📊 TOTAL MB:", totalMB);
 
     return {
       consumoMB: Number(totalMB.toFixed(2)),
     };
 
-  } catch {
+  } catch (e) {
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// 🔍 BUSCAR (MEJORADO SIN ROMPER)
+// 🔍 BUSCAR (NO SE ROMPE)
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -228,7 +245,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (REPARADO ✅)
+// 🔁 RESET (FUNCIONANDO)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -240,7 +257,6 @@ app.post("/api/device/reset/:value", async (req, res) => {
       });
     }
 
-    // 🔥 FORZAR IMSI CORRECTO
     const extra = await getSimExtraData(sim);
     const imsi = extra.imsi || sim.imsi;
 
