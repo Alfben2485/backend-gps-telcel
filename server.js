@@ -13,7 +13,7 @@ const agent = new https.Agent({
 });
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
-const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc1MTU2NDQ4MjA4LCJ1c2VySWQiOjU3M30.HqOlwnoPazM0vigG0sPf6hKmfiCcTJnDO9Y6m9f69yopGGWt60RJxQmE-aARjZVf2T8cGKdJl7hz6rU_JZ541A";
+const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc1MTU2NDQ4MjA4LCJ1c2VySWQiOjU3M30.HqOlwnoPazM0vigG0sPf6hKmfiCcTJnDO9Y6m9f69yopGGWt60RJxQmE-aARjZVf2T8cGKdJl7hz6rU_JZ541A"; // ⚠️ CAMBIA ESTO
 
 // 🔹 HEADERS
 function claroHeaders() {
@@ -23,7 +23,7 @@ function claroHeaders() {
   };
 }
 
-// 🔹 REQUEST BASE
+// 🔹 REQUEST BASE (rápido)
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
@@ -63,7 +63,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSQUEDA (RESTAURADA - ESTA ES LA BUENA)
+// 🔥 BUSQUEDA DIRECTA (ULTRA RÁPIDA)
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -88,18 +88,19 @@ async function fetchSim(value) {
 
     if (!found) return null;
 
+    const imsi = extractIMSI(found);
+
     console.log("✅ SIM encontrada:", found.iccid);
 
     return {
       iccid: found.iccid,
       msisdn: found.msisdn,
-      imsi: extractIMSI(found),
+      imsi,
       estado: found.state || found.status || "N/A",
-
-      // 🔹 PLAN (lo que sí existe)
       plan:
-        found.servicePlanName ||
         found.ratePlanName ||
+        found.servicePlan?.servicePlanName ||
+        found.planName ||
         "N/A",
     };
 
@@ -109,45 +110,36 @@ async function fetchSim(value) {
   }
 }
 
-// 🔥 CONSUMO REAL (CORREGIDO BIEN)
-async function fetchUsage(sim) {
+// 🔥 CONSUMO RÁPIDO
+async function fetchUsageSafe(iccid) {
   try {
-    if (!sim.imsi) {
-      console.log("❌ SIN IMSI");
-      return { consumoMB: 0 };
-    }
-
-    const r = await claroRequest({
+    const r = await axios({
+      httpsAgent: agent,
+      timeout: 8000,
       method: "post",
-      url: `${BASE_URL}/gcapi/device/sessionHistory`,
-      data: {
-        imsi: sim.imsi,
-        start: 0,
-        length: 1000,
-      },
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      headers: claroHeaders(),
+      data: { iccid },
     });
 
-    const sessions = r.data?.data || [];
+    const data = r.data?.data || {};
 
-    console.log("📊 SESIONES:", sessions.length);
-
-    let totalBytes = 0;
-
-    sessions.forEach((s) => {
-      totalBytes += Number(s.totalBytes || 0);
-    });
+    const totalKB =
+      Number(data.totalKB) ||
+      Number(data.usageKB) ||
+      Number(data.totalBytes) / 1024 ||
+      0;
 
     return {
-      consumoMB: Number((totalBytes / 1024 / 1024).toFixed(2)),
+      consumoKB: totalKB,
+      consumoMB: Number((totalKB / 1024).toFixed(2)),
     };
-
-  } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
-    return { consumoMB: 0 };
+  } catch {
+    return { consumoKB: 0, consumoMB: 0 };
   }
 }
 
-// 🔍 ENDPOINT
+// 🔍 BUSCAR
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -157,7 +149,7 @@ app.get("/api/device/full/:value", async (req, res) => {
     }
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsage(sim),
+      fetchUsageSafe(sim.iccid),
       getTotalSims(),
     ]);
 
@@ -165,6 +157,7 @@ app.get("/api/device/full/:value", async (req, res) => {
       ok: true,
       totalSims,
       ...sim,
+      consumoKB: consumo.consumoKB,
       consumoMB: consumo.consumoMB,
     });
 
@@ -173,7 +166,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (SIN TOCAR)
+// 🔁 RESET
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
