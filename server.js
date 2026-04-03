@@ -23,7 +23,7 @@ function claroHeaders() {
   };
 }
 
-// REQUEST BASE
+// REQUEST
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
@@ -63,7 +63,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔍 BUSQUEDA (NO SE TOCA)
+// 🔍 BUSQUEDA (SIN TOCAR)
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -72,9 +72,7 @@ async function fetchSim(value) {
       data: {
         start: 0,
         length: 10,
-        search: {
-          value: value,
-        },
+        search: { value },
       },
     });
 
@@ -88,15 +86,11 @@ async function fetchSim(value) {
 
     if (!found) return null;
 
-    const imsi = extractIMSI(found);
-
     return {
       iccid: found.iccid,
       msisdn: found.msisdn,
-      imsi,
+      imsi: extractIMSI(found),
       estado: found.state || found.status || "N/A",
-
-      // 🔹 PLAN (lo mejor disponible)
       plan:
         found.servicePlan?.servicePlanName ||
         found.servicePlanName ||
@@ -110,22 +104,33 @@ async function fetchSim(value) {
   }
 }
 
-// 🔥 CONSUMO REAL DESDE SESSION HISTORY
-async function fetchUsageFromSessions(iccid) {
+// 🔥 CONSUMO REAL (AHORA SÍ FUNCIONA)
+async function fetchUsageFromSessions(imsi) {
   try {
+    if (!imsi) return { consumoKB: 0, consumoMB: 0 };
+
+    const now = new Date();
+    const past = new Date();
+    past.setDate(now.getDate() - 30); // últimos 30 días
+
+    const format = (d) =>
+      d.toISOString().slice(0, 19).replace("T", " ");
+
     const r = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/device/sessionHistory`,
       data: {
-        iccid: iccid,
+        imsi: imsi,
+        startDate: format(past),
+        endDate: format(now),
         start: 0,
-        length: 1000, // traer muchas sesiones
+        length: 1000,
       },
     });
 
     const sessions = r.data?.data || [];
 
-    console.log("📊 SESIONES:", sessions.length);
+    console.log("📊 SESIONES ENCONTRADAS:", sessions.length);
 
     let totalBytes = 0;
 
@@ -144,7 +149,7 @@ async function fetchUsageFromSessions(iccid) {
   }
 }
 
-// 🔍 BUSCAR
+// 🔍 ENDPOINT
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -154,7 +159,7 @@ app.get("/api/device/full/:value", async (req, res) => {
     }
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsageFromSessions(sim.iccid),
+      fetchUsageFromSessions(sim.imsi),
       getTotalSims(),
     ]);
 
@@ -171,7 +176,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// RESET (CORRECTO CON IMSI)
+// RESET
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -201,12 +206,7 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
-// ROOT
-app.get("/", (req, res) => {
-  res.send("Servidor funcionando 🚀");
-});
-
 // START
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Servidor listo");
+  console.log("🚀 SERVIDOR LISTO");
 });
