@@ -48,7 +48,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSQUEDA (ESTA ES LA BUENA - NO TOCAR)
+// 🔥 BUSQUEDA (ESTABLE - NO TOCAR)
 async function fetchSim(value) {
   try {
     const r = await req({
@@ -86,42 +86,35 @@ async function fetchSim(value) {
   }
 }
 
-// 🔥 PLAN REAL (CON PAGINACIÓN)
-async function fetchPlanFromSims(iccid) {
+// 🔥 PLAN REAL (CORREGIDO DEFINITIVO)
+async function fetchPlanFromSim(iccid) {
   try {
-    const PAGE_SIZE = 500;
-    const MAX_PAGES = 30;
+    const r = await req({
+      method: "post",
+      url: `${BASE_URL}/gcapi/get/sim`,
+      data: {
+        iccid: iccid,
+      },
+    });
 
-    for (let page = 0; page < MAX_PAGES; page++) {
+    console.log("📦 RESPUESTA get/sim:", r.data);
 
-      const r = await req({
-        method: "post",
-        url: `${BASE_URL}/gcapi/get/sims`,
-        data: {
-          start: page * PAGE_SIZE,
-          length: PAGE_SIZE,
-        },
-      });
+    const sim = r.data?.data;
 
-      const data = r.data?.data || [];
-
-      console.log(`📦 Página ${page}: ${data.length} sims`);
-
-      const sim = data.find(
-        (s) =>
-          String(s.iccid).trim() === String(iccid).trim()
-      );
-
-      if (sim) {
-        console.log("✅ PLAN:", sim.servicePlanName);
-        return sim.servicePlanName || "N/A";
-      }
-
-      if (data.length < PAGE_SIZE) break;
+    if (!sim) {
+      console.log("❌ SIN DATA EN get/sim");
+      return "N/A";
     }
 
-    console.log("❌ PLAN NO ENCONTRADO");
-    return "N/A";
+    const plan =
+      sim.servicePlanName ||
+      sim.planName ||
+      sim.ratePlanName ||
+      "N/A";
+
+    console.log("✅ PLAN:", plan);
+
+    return plan;
 
   } catch (e) {
     console.log("❌ ERROR PLAN:", e.message);
@@ -147,9 +140,9 @@ async function fetchUsage(sim) {
       },
     });
 
-    const sessions = r.data?.data || [];
+    console.log("📊 RAW SESSION:", r.data);
 
-    console.log("📊 SESIONES:", sessions.length);
+    const sessions = r.data?.data || [];
 
     let totalBytes = 0;
 
@@ -192,7 +185,7 @@ app.get("/api/device/full/:value", async (req, res) => {
     }
 
     const [plan, consumo, total] = await Promise.all([
-      fetchPlanFromSims(sim.iccid),
+      fetchPlanFromSim(sim.iccid),
       fetchUsage(sim),
       totalSims(),
     ]);
