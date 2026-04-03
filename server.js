@@ -130,127 +130,52 @@ async function getSimExtraData(sim) {
   }
 }
 
-// FECHAS
-function getDateRange() {
-  const now = new Date();
-
-  let start, end;
-
-  if (now.getDate() >= 27) {
-    start = new Date(now.getFullYear(), now.getMonth(), 27);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
-  } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
-    end = new Date(now.getFullYear(), now.getMonth(), 25);
-  }
-
-  const format = (d) => d.toISOString().split("T")[0];
-
-  return {
-    startDate: format(start),
-    endDate: format(end),
-  };
-}
-
-// 🔥 CONSUMO DEFINITIVO
+// 🔥 CONSUMO REAL (DEVICE DATA USAGE)
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
 
-    const { startDate, endDate } = getDateRange();
+    const r = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/dataUsage`,
+      data: {
+        imsi: imsi,
+      },
+    });
 
-    // 🔥 1. SESSION HISTORY
-    try {
-      const r = await claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/device/sessionHistory`,
-        data: {
-          imsi,
-          startDate,
-          endDate,
-          start: 0,
-          length: 200,
-        },
-      });
+    console.log("📊 DATA USAGE:", JSON.stringify(r.data));
 
-      const sessions = r.data?.data || [];
+    const data =
+      r.data?.data ||
+      r.data?.object ||
+      r.data ||
+      {};
 
-      let totalBytes = 0;
+    // 🔥 detectar campo correcto
+    let totalMB =
+      Number(data.totalMB) ||
+      Number(data.usageMB) ||
+      Number(data.totalUsageMB) ||
+      Number(data.totalBytes) / (1024 * 1024) ||
+      0;
 
-      sessions.forEach((s) => {
-        totalBytes += Number(s.totalBytes || 0);
-      });
+    console.log("📊 CONSUMO FINAL MB:", totalMB);
 
-      if (totalBytes > 0) {
-        return { consumoMB: Number((totalBytes / (1024 * 1024)).toFixed(2)) };
-      }
+    return {
+      consumoMB: Number(totalMB.toFixed(2)),
+    };
 
-    } catch {}
-
-    // 🔥 2. UPLINK
-    try {
-      const r = await claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/simUplink/usage`,
-        data: { imsi, startDate, endDate },
-      });
-
-      const data = r.data?.object || [];
-
-      let total = 0;
-      data.forEach((d) => {
-        total += Number(d["totalBytes(MB)"] || 0);
-      });
-
-      if (total > 0) return { consumoMB: total };
-
-    } catch {}
-
-    // 🔥 3. DOWNLINK
-    try {
-      const r = await claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/simDownlink/usage`,
-        data: { imsi, startDate, endDate },
-      });
-
-      const data = r.data?.object || [];
-
-      let total = 0;
-      data.forEach((d) => {
-        total += Number(d["totalBytes(MB)"] || 0);
-      });
-
-      if (total > 0) return { consumoMB: total };
-
-    } catch {}
-
-    // 🔥 4. CONSUMED
-    try {
-      const r = await claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/consumed/usage`,
-        data: { imsi },
-      });
-
-      const total = Number(r.data?.totalMB || 0);
-
-      if (total > 0) return { consumoMB: total };
-
-    } catch {}
-
-    return { consumoMB: 0 };
-
-  } catch {
+  } catch (e) {
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// ENDPOINT
+// ENDPOINT PRINCIPAL
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
-    if (!sim) return res.json({ ok: false });
+    if (!sim) return res.json({ ok: false, error: "SIM no encontrada" });
 
     const extra = await getSimExtraData(sim);
 
@@ -299,6 +224,7 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
+// START
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Servidor listo");
 });
