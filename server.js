@@ -15,7 +15,7 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc1MjQzNzc3NjI2LCJ1c2VySWQiOjU3M30.RMrthfrWTUjwKkWJR6fB5gZyJDVFgYJnIomTi_bc9qinjO7nuciP_f7Bc76mJ5LpgDaugAMKdI8xo6YZe7NV_g";
 
-// HEADERS
+// 🔹 HEADERS
 function claroHeaders() {
   return {
     Authorization: `Bearer ${TOKEN}`,
@@ -23,7 +23,7 @@ function claroHeaders() {
   };
 }
 
-// REQUEST BASE
+// 🔹 REQUEST BASE
 async function claroRequest(config) {
   return axios({
     httpsAgent: agent,
@@ -37,29 +37,7 @@ async function claroRequest(config) {
   });
 }
 
-// 🔹 FECHAS (27 → 25)
-function getBillingDates() {
-  const now = new Date();
-
-  let start, end;
-
-  if (now.getDate() >= 27) {
-    start = new Date(now.getFullYear(), now.getMonth(), 27);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
-  } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
-    end = new Date(now.getFullYear(), now.getMonth(), 25);
-  }
-
-  const format = (d) => d.toISOString().split("T")[0];
-
-  return {
-    startDate: format(start),
-    endDate: format(end),
-  };
-}
-
-// TOTAL SIMS
+// 🔹 TOTAL SIMS
 async function getTotalSims() {
   try {
     const r = await claroRequest({
@@ -67,13 +45,14 @@ async function getTotalSims() {
       url: `${BASE_URL}/gcapi/device/list`,
       data: { start: 0, length: 1 },
     });
+
     return r.data?.recordsFiltered || 0;
   } catch {
     return 0;
   }
 }
 
-// IMSI
+// 🔹 IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -84,7 +63,7 @@ function extractIMSI(item) {
   );
 }
 
-// BUSCAR SIM
+// 🔍 BUSCAR SIM
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -114,12 +93,13 @@ async function fetchSim(value) {
       estado: found.state || found.status || "N/A",
     };
 
-  } catch {
+  } catch (error) {
+    console.log("❌ ERROR BUSQUEDA:", error.message);
     return null;
   }
 }
 
-// PLAN
+// 🔥 PLAN + IMSI REAL
 async function getSimExtraData(sim) {
   try {
     const r = await claroRequest({
@@ -130,8 +110,11 @@ async function getSimExtraData(sim) {
       },
     });
 
-    const device = (r.data?.devices || []).find(
-      (d) => d.iccid === sim.iccid
+    const devices = r.data?.devices || [];
+
+    const device = devices.find(
+      (d) =>
+        String(d.iccid).trim() === String(sim.iccid).trim()
     );
 
     if (!device) return {};
@@ -141,39 +124,61 @@ async function getSimExtraData(sim) {
       plan: device.devicePlans?.planName || "N/A",
     };
 
-  } catch {
+  } catch (e) {
+    console.log("❌ ERROR PLAN:", e.message);
     return {};
   }
 }
 
-// 🔥 CONSUMO REAL FINAL
+// 🔥 CONSUMO REAL (DÍA POR DÍA)
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
 
-    const { startDate, endDate } = getBillingDates();
+    const now = new Date();
 
-    console.log("📅 RANGO:", startDate, endDate);
+    let start, end;
 
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/simUplink/usage`,
-      data: {
-        imsi: imsi,
-        startDate,
-        endDate,
-      },
-    });
+    if (now.getDate() >= 27) {
+      start = new Date(now.getFullYear(), now.getMonth(), 27);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
+      end = new Date(now.getFullYear(), now.getMonth(), 25);
+    }
 
-    console.log("📊 UPLINK:", JSON.stringify(r.data));
-
-    const list = r.data?.object || [];
+    const format = (d) => d.toISOString().split("T")[0];
 
     let total = 0;
 
-    list.forEach((d) => {
-      total += Number(d["totalBytes(MB)"] || 0);
-    });
+    for (
+      let d = new Date(start);
+      d <= end;
+      d.setDate(d.getDate() + 1)
+    ) {
+      const date = format(d);
+
+      try {
+        const r = await claroRequest({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simUplink/usage`,
+          data: {
+            imsi: imsi,
+            startDate: date,
+            endDate: date,
+          },
+        });
+
+        const list = r.data?.object || [];
+
+        list.forEach((item) => {
+          total += Number(item["totalBytes(MB)"] || 0);
+        });
+
+      } catch (e) {
+        console.log("⚠️ Error en día:", date);
+      }
+    }
 
     console.log("📊 CONSUMO TOTAL:", total);
 
@@ -187,11 +192,14 @@ async function fetchUsage(imsi) {
   }
 }
 
-// ENDPOINT
+// 🔍 ENDPOINT PRINCIPAL
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
-    if (!sim) return res.json({ ok: false });
+
+    if (!sim) {
+      return res.json({ ok: false, error: "SIM no encontrada" });
+    }
 
     const extra = await getSimExtraData(sim);
 
@@ -213,19 +221,26 @@ app.get("/api/device/full/:value", async (req, res) => {
       consumoMB: consumo.consumoMB,
     });
 
-  } catch {
-    res.json({ ok: false });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// RESET
+// 🔁 RESET (FUNCIONANDO)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
-    if (!sim) return res.json({ ok: false });
+
+    if (!sim) {
+      return res.json({ ok: false, error: "SIM no encontrada" });
+    }
 
     const extra = await getSimExtraData(sim);
     const imsi = extra.imsi || sim.imsi;
+
+    if (!imsi) {
+      return res.json({ ok: false, error: "IMSI no encontrado" });
+    }
 
     const r = await claroRequest({
       method: "post",
@@ -233,13 +248,26 @@ app.post("/api/device/reset/:value", async (req, res) => {
       data: { imsi },
     });
 
-    res.json({ ok: true, data: r.data });
+    res.json({
+      ok: true,
+      message: "Reset aplicado correctamente",
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      imsi,
+      data: r.data,
+    });
 
-  } catch {
-    res.json({ ok: false });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
+// ROOT
+app.get("/", (req, res) => {
+  res.send("Servidor funcionando 🚀");
+});
+
+// START
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 Servidor listo");
 });
