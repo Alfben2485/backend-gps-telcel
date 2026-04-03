@@ -30,25 +30,22 @@ async function req(config) {
     timeout: 15000,
     validateStatus: () => true,
     ...config,
-    headers: {
-      ...headers(),
-      ...(config.headers || {}),
-    },
+    headers: { ...headers(), ...(config.headers || {}) },
   });
 }
 
 // IMSI
-function extractIMSI(item) {
+function getIMSI(i) {
   return (
-    item.imsi ||
-    item.subscription?.imsi ||
-    item.sim?.imsi ||
-    item.deviceInfo?.imsi ||
+    i.imsi ||
+    i.subscription?.imsi ||
+    i.sim?.imsi ||
+    i.deviceInfo?.imsi ||
     null
   );
 }
 
-// 🔍 BUSQUEDA
+// 🔍 BUSCAR SIM
 async function fetchSim(value) {
   const r = await req({
     method: "post",
@@ -63,101 +60,105 @@ async function fetchSim(value) {
   const items = r.data?.data || [];
 
   const sim = items.find(
-    i =>
-      String(i.iccid).trim() === String(value).trim() ||
-      String(i.msisdn).trim() === String(value).trim()
+    (i) =>
+      String(i.iccid).trim() === value ||
+      String(i.msisdn).trim() === value
   );
 
   if (!sim) return null;
 
+  console.log("🔎 RAW SIM:", JSON.stringify(sim, null, 2));
+
   return {
+    raw: sim,
     iccid: sim.iccid,
     msisdn: sim.msisdn,
-    imsi: extractIMSI(sim),
+    imsi: getIMSI(sim),
     estado: sim.state || sim.status || "N/A",
-    plan:
-      sim.servicePlan?.servicePlanName ||
-      sim.servicePlanName ||
-      sim.ratePlanName ||
-      "N/A",
   };
 }
 
-// 🔥 FUNCIÓN UNIVERSAL DE CONSUMO
-async function fetchUsageUniversal(sim) {
+// 🔥 EXTRAER PLAN DINÁMICO
+function extractPlan(raw) {
+  return (
+    raw.servicePlan?.name ||
+    raw.servicePlan?.servicePlanName ||
+    raw.servicePlanName ||
+    raw.ratePlanName ||
+    raw.planName ||
+    raw.offerName ||
+    raw.productName ||
+    raw.tariffName ||
+    raw?.subscription?.planName ||
+    raw?.subscription?.offerName ||
+    "N/A"
+  );
+}
+
+// 🔥 CONSUMO UNIVERSAL (TODOS LOS ENDPOINTS)
+async function fetchUsage(sim) {
   try {
-    const now = new Date();
-    const past = new Date();
-    past.setDate(now.getDate() - 30);
+    let totalBytes = 0;
 
-    const format = (d) =>
-      d.toISOString().slice(0, 19).replace("T", " ");
-
-    let sessions = [];
-
-    // 🔹 INTENTO 1: con IMSI
-    if (sim.imsi) {
+    // 1️⃣ sessionHistory
+    try {
       const r1 = await req({
         method: "post",
         url: `${BASE_URL}/gcapi/device/sessionHistory`,
         data: {
           imsi: sim.imsi,
-          startDate: format(past),
-          endDate: format(now),
           start: 0,
           length: 1000,
         },
       });
 
-      sessions = r1.data?.data || [];
-    }
+      console.log("📊 sessionHistory:", r1.data);
 
-    // 🔹 INTENTO 2: fallback con ICCID
-    if (sessions.length === 0) {
-      const r2 = await req({
-        method: "post",
-        url: `${BASE_URL}/gcapi/device/sessionHistory`,
-        data: {
-          iccid: sim.iccid,
-          startDate: format(past),
-          endDate: format(now),
-          start: 0,
-          length: 1000,
-        },
+      const data = r1.data?.data || [];
+
+      data.forEach((s) => {
+        totalBytes +=
+          Number(s.totalBytes) ||
+          Number(s.dataVolume) ||
+          Number(s.bytes) ||
+          0;
       });
 
-      sessions = r2.data?.data || [];
+    } catch {}
+
+    // 2️⃣ sim/Data/Usage
+    if (totalBytes === 0) {
+      try {
+        const r2 = await req({
+          method: "post",
+          url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+          data: { iccid: sim.iccid },
+        });
+
+        console.log("📊 sim/Data/Usage:", r2.data);
+
+        const d = r2.data?.data || {};
+
+        totalBytes =
+          Number(d.totalBytes) ||
+          Number(d.usageBytes) ||
+          Number(d.totalKB) * 1024 ||
+          0;
+
+      } catch {}
     }
-
-    console.log("📊 SESIONES:", sessions.length);
-
-    if (sessions.length === 0) {
-      return { consumoKB: 0, consumoMB: 0 };
-    }
-
-    // 🔥 SUMAR TOTALBYTES (VARIOS FORMATOS)
-    let totalBytes = 0;
-
-    sessions.forEach((s) => {
-      totalBytes +=
-        Number(s.totalBytes) ||
-        Number(s.dataVolume) ||
-        Number(s.bytes) ||
-        0;
-    });
 
     return {
-      consumoKB: Number((totalBytes / 1024).toFixed(2)),
       consumoMB: Number((totalBytes / 1024 / 1024).toFixed(2)),
     };
 
   } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
-    return { consumoKB: 0, consumoMB: 0 };
+    console.log("❌ ERROR:", e.message);
+    return { consumoMB: 0 };
   }
 }
 
-// TOTAL SIMS
+// TOTAL
 async function totalSims() {
   try {
     const r = await req({
@@ -172,7 +173,7 @@ async function totalSims() {
   }
 }
 
-// 🔍 API
+// 🔍 API FINAL
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -181,16 +182,17 @@ app.get("/api/device/full/:value", async (req, res) => {
       return res.json({ ok: false, error: "SIM no encontrada" });
     }
 
-    const [consumo, total] = await Promise.all([
-      fetchUsageUniversal(sim),
-      totalSims(),
-    ]);
+    const plan = extractPlan(sim.raw);
+    const consumo = await fetchUsage(sim);
+    const total = await totalSims();
 
     res.json({
       ok: true,
       totalSims: total,
-      ...sim,
-      consumoKB: consumo.consumoKB,
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      estado: sim.estado,
+      plan,
       consumoMB: consumo.consumoMB,
     });
 
@@ -205,10 +207,7 @@ app.post("/api/device/reset/:value", async (req, res) => {
     const sim = await fetchSim(req.params.value);
 
     if (!sim || !sim.imsi) {
-      return res.json({
-        ok: false,
-        error: "IMSI no encontrado",
-      });
+      return res.json({ ok: false, error: "IMSI no encontrado" });
     }
 
     const r = await req({
@@ -217,19 +216,11 @@ app.post("/api/device/reset/:value", async (req, res) => {
       data: { imsi: sim.imsi },
     });
 
-    res.json({
-      ok: true,
-      message: "Reset aplicado",
-      ...sim,
-      data: r.data,
-    });
+    res.json({ ok: true, data: r.data });
 
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// START
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVIDOR LISTO");
-});
+app.listen(3000, () => console.log("🚀 SERVIDOR LISTO"));
