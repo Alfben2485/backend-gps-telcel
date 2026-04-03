@@ -16,7 +16,7 @@ const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 const TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJhbGZiZW4iLCJhY2NvdW50SWQiOjc4OSwiYXVkaWVuY2UiOiJ3ZWIiLCJjcmVhdGVkIjoxNzc1MTU2NDQ4MjA4LCJ1c2VySWQiOjU3M30.HqOlwnoPazM0vigG0sPf6hKmfiCcTJnDO9Y6m9f69yopGGWt60RJxQmE-aARjZVf2T8cGKdJl7hz6rU_JZ541A";
 
 // HEADERS
-function claroHeaders() {
+function headers() {
   return {
     Authorization: `Bearer ${TOKEN}`,
     "Content-Type": "application/json",
@@ -24,32 +24,17 @@ function claroHeaders() {
 }
 
 // REQUEST
-async function claroRequest(config) {
+async function req(config) {
   return axios({
     httpsAgent: agent,
     timeout: 15000,
     validateStatus: () => true,
     ...config,
     headers: {
-      ...claroHeaders(),
+      ...headers(),
       ...(config.headers || {}),
     },
   });
-}
-
-// TOTAL SIMS
-async function getTotalSims() {
-  try {
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: { start: 0, length: 1 },
-    });
-
-    return r.data?.recordsFiltered || 0;
-  } catch {
-    return 0;
-  }
 }
 
 // IMSI
@@ -63,79 +48,102 @@ function extractIMSI(item) {
   );
 }
 
-// 🔍 BUSQUEDA (SIN TOCAR)
+// 🔍 BUSQUEDA
 async function fetchSim(value) {
-  try {
-    const response = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: {
-        start: 0,
-        length: 10,
-        search: { value },
-      },
-    });
+  const r = await req({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: {
+      start: 0,
+      length: 20,
+      search: { value },
+    },
+  });
 
-    const items = response.data?.data || [];
+  const items = r.data?.data || [];
 
-    const found = items.find(
-      (item) =>
-        String(item.iccid).trim() === String(value).trim() ||
-        String(item.msisdn).trim() === String(value).trim()
-    );
+  const sim = items.find(
+    i =>
+      String(i.iccid).trim() === String(value).trim() ||
+      String(i.msisdn).trim() === String(value).trim()
+  );
 
-    if (!found) return null;
+  if (!sim) return null;
 
-    return {
-      iccid: found.iccid,
-      msisdn: found.msisdn,
-      imsi: extractIMSI(found),
-      estado: found.state || found.status || "N/A",
-      plan:
-        found.servicePlan?.servicePlanName ||
-        found.servicePlanName ||
-        found.ratePlanName ||
-        "N/A",
-    };
-
-  } catch (error) {
-    console.log("❌ ERROR BUSQUEDA:", error.message);
-    return null;
-  }
+  return {
+    iccid: sim.iccid,
+    msisdn: sim.msisdn,
+    imsi: extractIMSI(sim),
+    estado: sim.state || sim.status || "N/A",
+    plan:
+      sim.servicePlan?.servicePlanName ||
+      sim.servicePlanName ||
+      sim.ratePlanName ||
+      "N/A",
+  };
 }
 
-// 🔥 CONSUMO REAL (AHORA SÍ FUNCIONA)
-async function fetchUsageFromSessions(imsi) {
+// 🔥 FUNCIÓN UNIVERSAL DE CONSUMO
+async function fetchUsageUniversal(sim) {
   try {
-    if (!imsi) return { consumoKB: 0, consumoMB: 0 };
-
     const now = new Date();
     const past = new Date();
-    past.setDate(now.getDate() - 30); // últimos 30 días
+    past.setDate(now.getDate() - 30);
 
     const format = (d) =>
       d.toISOString().slice(0, 19).replace("T", " ");
 
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/sessionHistory`,
-      data: {
-        imsi: imsi,
-        startDate: format(past),
-        endDate: format(now),
-        start: 0,
-        length: 1000,
-      },
-    });
+    let sessions = [];
 
-    const sessions = r.data?.data || [];
+    // 🔹 INTENTO 1: con IMSI
+    if (sim.imsi) {
+      const r1 = await req({
+        method: "post",
+        url: `${BASE_URL}/gcapi/device/sessionHistory`,
+        data: {
+          imsi: sim.imsi,
+          startDate: format(past),
+          endDate: format(now),
+          start: 0,
+          length: 1000,
+        },
+      });
 
-    console.log("📊 SESIONES ENCONTRADAS:", sessions.length);
+      sessions = r1.data?.data || [];
+    }
 
+    // 🔹 INTENTO 2: fallback con ICCID
+    if (sessions.length === 0) {
+      const r2 = await req({
+        method: "post",
+        url: `${BASE_URL}/gcapi/device/sessionHistory`,
+        data: {
+          iccid: sim.iccid,
+          startDate: format(past),
+          endDate: format(now),
+          start: 0,
+          length: 1000,
+        },
+      });
+
+      sessions = r2.data?.data || [];
+    }
+
+    console.log("📊 SESIONES:", sessions.length);
+
+    if (sessions.length === 0) {
+      return { consumoKB: 0, consumoMB: 0 };
+    }
+
+    // 🔥 SUMAR TOTALBYTES (VARIOS FORMATOS)
     let totalBytes = 0;
 
     sessions.forEach((s) => {
-      totalBytes += Number(s.totalBytes || 0);
+      totalBytes +=
+        Number(s.totalBytes) ||
+        Number(s.dataVolume) ||
+        Number(s.bytes) ||
+        0;
     });
 
     return {
@@ -149,7 +157,22 @@ async function fetchUsageFromSessions(imsi) {
   }
 }
 
-// 🔍 ENDPOINT
+// TOTAL SIMS
+async function totalSims() {
+  try {
+    const r = await req({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: { start: 0, length: 1 },
+    });
+
+    return r.data?.recordsFiltered || 0;
+  } catch {
+    return 0;
+  }
+}
+
+// 🔍 API
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -158,21 +181,21 @@ app.get("/api/device/full/:value", async (req, res) => {
       return res.json({ ok: false, error: "SIM no encontrada" });
     }
 
-    const [consumo, totalSims] = await Promise.all([
-      fetchUsageFromSessions(sim.imsi),
-      getTotalSims(),
+    const [consumo, total] = await Promise.all([
+      fetchUsageUniversal(sim),
+      totalSims(),
     ]);
 
     res.json({
       ok: true,
-      totalSims,
+      totalSims: total,
       ...sim,
       consumoKB: consumo.consumoKB,
       consumoMB: consumo.consumoMB,
     });
 
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -184,11 +207,11 @@ app.post("/api/device/reset/:value", async (req, res) => {
     if (!sim || !sim.imsi) {
       return res.json({
         ok: false,
-        error: "SIM o IMSI no encontrado",
+        error: "IMSI no encontrado",
       });
     }
 
-    const r = await claroRequest({
+    const r = await req({
       method: "post",
       url: `${BASE_URL}/gcapi/sim/reset`,
       data: { imsi: sim.imsi },
@@ -196,13 +219,13 @@ app.post("/api/device/reset/:value", async (req, res) => {
 
     res.json({
       ok: true,
-      message: "Reset aplicado correctamente",
+      message: "Reset aplicado",
       ...sim,
       data: r.data,
     });
 
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
