@@ -52,7 +52,7 @@ async function getTotalSims() {
   }
 }
 
-// 🔹 IMSI BASE
+// 🔹 IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -63,7 +63,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 BUSQUEDA (NO SE TOCA)
+// 🔍 BUSQUEDA (NO SE TOCA)
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -72,9 +72,7 @@ async function fetchSim(value) {
       data: {
         start: 0,
         length: 10,
-        search: {
-          value: value,
-        },
+        search: { value },
       },
     });
 
@@ -102,7 +100,7 @@ async function fetchSim(value) {
 }
 
 //
-// 🔥 OBTENER DATOS EXTRA (IMSI + PLAN)
+// 🔥 EXTRA DATA (IMSI + PLAN)
 //
 async function getSimExtraData(sim) {
   try {
@@ -159,7 +157,7 @@ function getDateRange() {
 }
 
 //
-// 🔥 CONSUMO (ROBUSTO)
+// 🔥 CONSUMO (FALLBACK REAL)
 //
 async function fetchUsage(imsi) {
   try {
@@ -167,51 +165,61 @@ async function fetchUsage(imsi) {
 
     const { startDate, endDate } = getDateRange();
 
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/simUplink/usage`,
-      data: {
-        imsi,
-        startDate,
-        endDate,
-      },
-    });
+    const endpoints = [
+      "/gcapi/simUplink/usage",
+      "/gcapi/simDownlink/usage",
+      "/gcapi/consumed/usage",
+    ];
 
-    console.log("📊 RAW USAGE:", JSON.stringify(r.data, null, 2));
+    for (const ep of endpoints) {
+      try {
+        const r = await claroRequest({
+          method: "post",
+          url: `${BASE_URL}${ep}`,
+          data: { imsi, startDate, endDate },
+        });
 
-    const raw =
-      r.data?.object ||
-      r.data?.data ||
-      r.data?.usage ||
-      r.data?.result ||
-      [];
+        console.log(`📊 PROBANDO ${ep}:`, JSON.stringify(r.data));
 
-    let totalMB = 0;
+        const raw =
+          r.data?.object ||
+          r.data?.data ||
+          r.data?.usage ||
+          [];
 
-    if (Array.isArray(raw)) {
-      raw.forEach((d) => {
-        totalMB += Number(d["totalBytes(MB)"] || d.totalBytes || 0);
-      });
-    } else if (typeof raw === "object") {
-      totalMB =
-        Number(raw["totalBytes(MB)"]) ||
-        Number(raw.totalBytes) ||
-        0;
+        let totalMB = 0;
+
+        if (Array.isArray(raw)) {
+          raw.forEach((d) => {
+            totalMB += Number(
+              d["totalBytes(MB)"] ||
+              d.totalBytes ||
+              d.totalMB ||
+              0
+            );
+          });
+        }
+
+        if (totalMB > 0) {
+          console.log("✅ CONSUMO ENCONTRADO:", totalMB);
+          return {
+            consumoMB: Number(totalMB.toFixed(2)),
+          };
+        }
+
+      } catch (e) {
+        console.log(`❌ ERROR EN ${ep}`);
+      }
     }
 
-    console.log("📊 TOTAL MB:", totalMB);
-
-    return {
-      consumoMB: Number(totalMB.toFixed(2)),
-    };
+    return { consumoMB: 0 };
 
   } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// 🔍 BUSCAR (NO SE ROMPE)
+// 🔍 ENDPOINT PRINCIPAL
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
