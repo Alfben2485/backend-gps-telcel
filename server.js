@@ -100,12 +100,11 @@ async function fetchSim(value) {
 }
 
 //
-// 🔥 EXTRA DATA (IMSI + PLAN) → CORREGIDO
+// 🔥 EXTRA DATA (IMSI + PLAN)
 //
 async function getSimExtraData(sim) {
   try {
     const body = {};
-
     if (sim.msisdn) body.msisdn = sim.msisdn;
     if (sim.iccid) body.iccid = sim.iccid;
 
@@ -115,11 +114,7 @@ async function getSimExtraData(sim) {
       data: body,
     });
 
-    console.log("📦 RESPUESTA get/sims:", JSON.stringify(r.data));
-
     const devices = r.data?.devices || [];
-
-    if (!devices.length) return {};
 
     const device = devices.find(
       (d) =>
@@ -165,7 +160,7 @@ function getDateRange() {
 }
 
 //
-// 🔥 CONSUMO (FALLBACK)
+// 🔥 CONSUMO REAL (SESSION HISTORY)
 //
 async function fetchUsage(imsi) {
   try {
@@ -173,53 +168,42 @@ async function fetchUsage(imsi) {
 
     const { startDate, endDate } = getDateRange();
 
-    const endpoints = [
-      "/gcapi/simUplink/usage",
-      "/gcapi/simDownlink/usage",
-      "/gcapi/consumed/usage",
-    ];
+    const r = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/sessionHistory`,
+      data: {
+        imsi,
+        startDate,
+        endDate,
+      },
+    });
 
-    for (const ep of endpoints) {
-      try {
-        const r = await claroRequest({
-          method: "post",
-          url: `${BASE_URL}${ep}`,
-          data: { imsi, startDate, endDate },
-        });
+    console.log("📊 SESSION HISTORY:", JSON.stringify(r.data));
 
-        console.log(`📊 PROBANDO ${ep}:`, JSON.stringify(r.data));
+    const sessions =
+      r.data?.data ||
+      r.data?.sessions ||
+      r.data?.object ||
+      [];
 
-        const raw =
-          r.data?.object ||
-          r.data?.data ||
-          r.data?.usage ||
-          [];
+    let totalBytes = 0;
 
-        let totalMB = 0;
-
-        if (Array.isArray(raw)) {
-          raw.forEach((d) => {
-            totalMB += Number(
-              d["totalBytes(MB)"] ||
-              d.totalBytes ||
-              d.totalMB ||
-              0
-            );
-          });
-        }
-
-        if (totalMB > 0) {
-          return {
-            consumoMB: Number(totalMB.toFixed(2)),
-          };
-        }
-
-      } catch {}
+    if (Array.isArray(sessions)) {
+      sessions.forEach((s) => {
+        totalBytes += Number(s.totalBytes || 0);
+      });
     }
 
-    return { consumoMB: 0 };
+    const totalMB = totalBytes / (1024 * 1024);
 
-  } catch {
+    console.log("📊 TOTAL MB:", totalMB);
+
+    return {
+      consumoMB: Number(totalMB.toFixed(2)),
+    };
+
+  } catch (e) {
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
@@ -258,7 +242,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (NO SE ROMPE)
+// 🔁 RESET (FUNCIONANDO)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
