@@ -63,7 +63,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔍 BUSQUEDA (NO SE TOCA)
+// 🔍 BUSQUEDA
 async function fetchSim(value) {
   try {
     const response = await claroRequest({
@@ -99,9 +99,7 @@ async function fetchSim(value) {
   }
 }
 
-//
-// 🔥 EXTRA DATA (IMSI + PLAN)
-//
+// 🔥 EXTRA DATA (PLAN + IMSI)
 async function getSimExtraData(sim) {
   try {
     const body = {};
@@ -135,9 +133,7 @@ async function getSimExtraData(sim) {
   }
 }
 
-//
 // 🔥 FECHAS (27 → 25)
-//
 function getDateRange() {
   const now = new Date();
 
@@ -159,9 +155,7 @@ function getDateRange() {
   };
 }
 
-//
-// 🔥 CONSUMO REAL (SESSION HISTORY)
-//
+// 🔥 CONSUMO (CORREGIDO REAL)
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
@@ -175,16 +169,14 @@ async function fetchUsage(imsi) {
         imsi,
         startDate,
         endDate,
+        start: 0,       // 🔥 CLAVE
+        length: 100     // 🔥 CLAVE
       },
     });
 
     console.log("📊 SESSION HISTORY:", JSON.stringify(r.data));
 
-    const sessions =
-      r.data?.data ||
-      r.data?.sessions ||
-      r.data?.object ||
-      [];
+    const sessions = r.data?.data || [];
 
     let totalBytes = 0;
 
