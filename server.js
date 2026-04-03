@@ -90,20 +90,17 @@ async function fetchSim(value) {
 
     const imsi = extractIMSI(found);
 
-    console.log("✅ SIM encontrada:", found.iccid);
-
     return {
       iccid: found.iccid,
       msisdn: found.msisdn,
       imsi,
       estado: found.state || found.status || "N/A",
 
-      // 🔥 PLAN MEJORADO (SIN INVENTAR)
+      // 🔹 PLAN (lo mejor disponible)
       plan:
         found.servicePlan?.servicePlanName ||
         found.servicePlanName ||
         found.ratePlanName ||
-        found.planName ||
         "N/A",
     };
 
@@ -113,37 +110,34 @@ async function fetchSim(value) {
   }
 }
 
-// 🔥 CONSUMO (EL QUE SÍ TE FUNCIONABA PERO CORREGIDO)
-async function fetchUsageSafe(iccid) {
+// 🔥 CONSUMO REAL DESDE SESSION HISTORY
+async function fetchUsageFromSessions(iccid) {
   try {
-    const r = await axios({
-      httpsAgent: agent,
-      timeout: 8000,
+    const r = await claroRequest({
       method: "post",
-      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-      headers: claroHeaders(),
+      url: `${BASE_URL}/gcapi/device/sessionHistory`,
       data: {
         iccid: iccid,
-        // 🔥 agregado clave
-        startDate: "2024-01-01",
-        endDate: new Date().toISOString().slice(0, 10),
+        start: 0,
+        length: 1000, // traer muchas sesiones
       },
     });
 
-    console.log("📊 RAW USAGE:", r.data);
+    const sessions = r.data?.data || [];
 
-    const data = r.data?.data || {};
+    console.log("📊 SESIONES:", sessions.length);
 
-    const totalKB =
-      Number(data.totalKB) ||
-      Number(data.usageKB) ||
-      (Number(data.totalBytes) / 1024) ||
-      0;
+    let totalBytes = 0;
+
+    sessions.forEach((s) => {
+      totalBytes += Number(s.totalBytes || 0);
+    });
 
     return {
-      consumoKB: totalKB,
-      consumoMB: Number((totalKB / 1024).toFixed(2)),
+      consumoKB: Number((totalBytes / 1024).toFixed(2)),
+      consumoMB: Number((totalBytes / 1024 / 1024).toFixed(2)),
     };
+
   } catch (e) {
     console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoKB: 0, consumoMB: 0 };
@@ -160,7 +154,7 @@ app.get("/api/device/full/:value", async (req, res) => {
     }
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsageSafe(sim.iccid),
+      fetchUsageFromSessions(sim.iccid),
       getTotalSims(),
     ]);
 
@@ -177,7 +171,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// RESET (SE DEJA COMO LO TENÍAS BIEN)
+// RESET (CORRECTO CON IMSI)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
