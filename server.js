@@ -14,7 +14,6 @@ const agent = new https.Agent({
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
-
 // =========================
 // 🔥 CUENTA ORIGINAL DE TOTAL GPS (NO TOCAR)
 // =========================
@@ -23,7 +22,6 @@ const PASSWORD = "Soporte122@";
 
 let TOKEN = null;
 let TOKEN_TIME = 0;
-
 
 // =========================
 // 🔥 CUENTAS EXTRA LAUHID
@@ -45,7 +43,6 @@ const ACCOUNTS_EXTRA = {
 
 const TOKEN_DURATION = 50 * 60 * 1000;
 
-
 // =========================
 // 🔐 TOKEN ORIGINAL
 // =========================
@@ -66,7 +63,6 @@ async function ensureToken() {
     await getToken();
   }
 }
-
 
 // =========================
 // 🔐 TOKEN EXTRA
@@ -90,7 +86,6 @@ async function ensureTokenExtra(key) {
   }
 }
 
-
 // =========================
 // 🔥 REQUEST ORIGINAL
 // =========================
@@ -108,7 +103,6 @@ async function claroRequest(config) {
   });
 }
 
-
 // =========================
 // 🔥 REQUEST EXTRA
 // =========================
@@ -125,7 +119,6 @@ async function claroRequestExtra(key, config) {
     },
   });
 }
-
 
 // =========================
 // 🔹 FUNCIONES GENERALES
@@ -157,7 +150,6 @@ function getDateRange() {
 
   return { start: format(start), end: format(end) };
 }
-
 
 // =========================
 // 🔥 FUNCIONES CORE (GENERICAS)
@@ -260,7 +252,6 @@ async function fetchUsage(request, imsi) {
   return { consumoMB: Number(total.toFixed(3)) };
 }
 
-
 // =========================
 // 🔥 ENDPOINT ORIGINAL (NO TOCAR)
 // =========================
@@ -292,89 +283,8 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-
 // =========================
-// 🔥 ENDPOINT CUENTA 2
-// =========================
-app.get("/api2/device/full/:value", async (req, res) => {
-  try {
-    const sim = await fetchSim(
-      (cfg) => claroRequestExtra("cuenta2", cfg),
-      req.params.value
-    );
-
-    if (!sim) return res.json({ ok: false });
-
-    const extra = await getSimExtra(
-      (cfg) => claroRequestExtra("cuenta2", cfg),
-      sim
-    );
-
-    const imsi = extra.imsi || extractIMSI(sim);
-
-    const [consumo, totalSims] = await Promise.all([
-      fetchUsage((cfg) => claroRequestExtra("cuenta2", cfg), imsi),
-      getTotalSims((cfg) => claroRequestExtra("cuenta2", cfg)),
-    ]);
-
-    res.json({
-      ok: true,
-      totalSims,
-      iccid: sim.iccid,
-      msisdn: sim.msisdn,
-      estado: sim.state,
-      plan: extra.plan,
-      consumoMB: consumo.consumoMB,
-    });
-
-  } catch {
-    res.json({ ok: false });
-  }
-});
-
-
-// =========================
-// 🔥 ENDPOINT CUENTA 3
-// =========================
-app.get("/api3/device/full/:value", async (req, res) => {
-  try {
-    const sim = await fetchSim(
-      (cfg) => claroRequestExtra("cuenta3", cfg),
-      req.params.value
-    );
-
-    if (!sim) return res.json({ ok: false });
-
-    const extra = await getSimExtra(
-      (cfg) => claroRequestExtra("cuenta3", cfg),
-      sim
-    );
-
-    const imsi = extra.imsi || extractIMSI(sim);
-
-    const [consumo, totalSims] = await Promise.all([
-      fetchUsage((cfg) => claroRequestExtra("cuenta3", cfg), imsi),
-      getTotalSims((cfg) => claroRequestExtra("cuenta3", cfg)),
-    ]);
-
-    res.json({
-      ok: true,
-      totalSims,
-      iccid: sim.iccid,
-      msisdn: sim.msisdn,
-      estado: sim.state,
-      plan: extra.plan,
-      consumoMB: consumo.consumoMB,
-    });
-
-  } catch {
-    res.json({ ok: false });
-  }
-});
-
-
-// =========================
-// 🔁 RESET (ORIGINAL)
+// 🔁 RESET (CORREGIDO)
 // =========================
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
@@ -384,6 +294,10 @@ app.post("/api/device/reset/:value", async (req, res) => {
     const extra = await getSimExtra(claroRequest, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
+    if (!imsi) {
+      return res.json({ ok: false, error: "IMSI no encontrado" });
+    }
+
     const r = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/sim/reset`,
@@ -391,16 +305,15 @@ app.post("/api/device/reset/:value", async (req, res) => {
     });
 
     res.json({ ok: true, data: r.data });
-
-  } catch {
-    res.json({ ok: false });
+  } catch (error) {
+    console.error("❌ ERROR AL HACER RESET:", error.message);
+    res.json({ ok: false, error: "Error en el reset" });
   }
 });
-
 
 // =========================
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER MULTICUENTA OK");
+  console.log("🚀 SERVER FUNCIONANDO CON CONSUMO Y RESET CORREGIDOS");
 });
