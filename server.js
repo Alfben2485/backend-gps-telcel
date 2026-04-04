@@ -23,9 +23,9 @@ let TOKEN = null;
 let TOKEN_TIME = 0;
 const TOKEN_DURATION = 50 * 60 * 1000;
 
-// 🔥 CACHE CONSUMO
+// 🔥 CACHE
 const usageCache = new Map();
-const USAGE_CACHE_TIME = 2 * 60 * 1000; // 2 min
+const CACHE_TIME = 2 * 60 * 1000;
 
 // 🔥 TOKEN
 async function getToken() {
@@ -43,7 +43,7 @@ async function getToken() {
     TOKEN = r.data?.token;
     TOKEN_TIME = Date.now();
 
-    console.log("🔐 TOKEN RENOVADO");
+    console.log("🔐 TOKEN OK");
   } catch (e) {
     console.log("❌ TOKEN ERROR:", e.message);
   }
@@ -62,7 +62,7 @@ function headers() {
   };
 }
 
-// 🔥 REQUEST
+// 🔥 REQUEST BASE
 async function claroRequest(config) {
   await ensureToken();
 
@@ -172,14 +172,14 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO OPTIMIZADO
+// 🔥 CONSUMO ESTABLE Y RÁPIDO
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
 
     // 🔥 CACHE
     const cached = usageCache.get(imsi);
-    if (cached && Date.now() - cached.time < USAGE_CACHE_TIME) {
+    if (cached && Date.now() - cached.time < CACHE_TIME) {
       return cached.data;
     }
 
@@ -197,29 +197,51 @@ async function fetchUsage(imsi) {
 
     const format = (d) => d.toISOString().split("T")[0];
 
-    // 🔥 UNA SOLA LLAMADA POR TIPO (NO POR DÍA)
-    const [uplink, downlink, session] = await Promise.all([
-      claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/simUplink/usage`,
-        data: {
-          imsi,
-          startDate: format(start),
-          endDate: format(end),
-        },
-      }).catch(() => null),
+    const dates = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      dates.push(format(new Date(d)));
+    }
 
-      claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/simDownlink/usage`,
-        data: {
-          imsi,
-          startDate: format(start),
-          endDate: format(end),
-        },
-      }).catch(() => null),
+    let total = 0;
 
-      claroRequest({
+    // 🔥 EJECUTAR EN BLOQUES (más rápido sin romper API)
+    const chunkSize = 5;
+
+    for (let i = 0; i < dates.length; i += chunkSize) {
+      const chunk = dates.slice(i, i + chunkSize);
+
+      const requests = chunk.map((date) =>
+        Promise.all([
+          claroRequest({
+            method: "post",
+            url: `${BASE_URL}/gcapi/simUplink/usage`,
+            data: { imsi, startDate: date, endDate: date },
+          }).catch(() => null),
+
+          claroRequest({
+            method: "post",
+            url: `${BASE_URL}/gcapi/simDownlink/usage`,
+            data: { imsi, startDate: date, endDate: date },
+          }).catch(() => null),
+        ])
+      );
+
+      const results = await Promise.all(requests);
+
+      for (const [up, down] of results) {
+        (up?.data?.object || []).forEach(
+          (i) => (total += Number(i["totalBytes(MB)"] || 0))
+        );
+
+        (down?.data?.object || []).forEach(
+          (i) => (total += Number(i["totalBytes(MB)"] || 0))
+        );
+      }
+    }
+
+    // 🔥 SESSION ACTIVA
+    try {
+      const r = await claroRequest({
         method: "post",
         url: `${BASE_URL}/gcapi/device/sessionHistory`,
         data: {
@@ -227,22 +249,13 @@ async function fetchUsage(imsi) {
           startDate: format(start),
           endDate: format(end),
         },
-      }).catch(() => null),
-    ]);
+      });
 
-    let total = 0;
+      (r.data?.data || []).forEach(
+        (s) => (total += Number(s.totalBytes || 0) / (1024 * 1024))
+      );
 
-    (uplink?.data?.object || []).forEach(
-      (i) => (total += Number(i["totalBytes(MB)"] || 0))
-    );
-
-    (downlink?.data?.object || []).forEach(
-      (i) => (total += Number(i["totalBytes(MB)"] || 0))
-    );
-
-    (session?.data?.data || []).forEach(
-      (s) => (total += Number(s.totalBytes || 0) / (1024 * 1024))
-    );
+    } catch {}
 
     const result = { consumoMB: Number(total.toFixed(3)) };
 
@@ -288,7 +301,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (SIN CAMBIOS)
+// 🔁 RESET (INTACTO)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -311,5 +324,5 @@ app.post("/api/device/reset/:value", async (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER ULTRA RÁPIDO");
+  console.log("🚀 SERVER ESTABLE + RÁPIDO + FUNCIONANDO");
 });
