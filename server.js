@@ -93,6 +93,19 @@ async function claroRequest(config) {
 
   return r;
 }
+// 🔹 TOTAL SIMS
+async function getTotalSims() {
+  try {
+    const r = await claroRequest({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/list`,
+      data: { start: 0, length: 1 },
+    });
+    return r.data?.recordsFiltered || 0;
+  } catch {
+    return 0;
+  }
+}
 
 // 🔹 EXTRAER IMSI
 function extractIMSI(item) {
