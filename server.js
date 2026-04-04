@@ -14,39 +14,51 @@ const agent = new https.Agent({
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
-// 🔐 CREDENCIALES
+
+// =========================
+// 🔥 CUENTA ORIGINAL DE TOTAL GPS (NO TOCAR)
+// =========================
 const USERNAME = "alfben";
 const PASSWORD = "Soporte122@";
 
-// 🔑 TOKEN
 let TOKEN = null;
 let TOKEN_TIME = 0;
+
+
+// =========================
+// 🔥 CUENTAS EXTRA LAUHID
+// =========================
+const ACCOUNTS_EXTRA = {
+  cuenta2: {
+    username: "alfben2",
+    password: "Soporte122@",
+    token: null,
+    tokenTime: 0,
+  },
+  cuenta3: {
+    username: "alfben4",
+    password: "Soporte122@",
+    token: null,
+    tokenTime: 0,
+  },
+};
+
 const TOKEN_DURATION = 50 * 60 * 1000;
 
-// 🔥 CACHE
-const usageCache = new Map();
-const CACHE_TIME = 2 * 60 * 1000;
 
-// 🔥 TOKEN
+// =========================
+// 🔐 TOKEN ORIGINAL
+// =========================
 async function getToken() {
-  try {
-    const r = await axios({
-      httpsAgent: agent,
-      method: "post",
-      url: `${BASE_URL}/gcapi/auth`,
-      data: {
-        username: USERNAME,
-        password: PASSWORD,
-      },
-    });
+  const r = await axios({
+    httpsAgent: agent,
+    method: "post",
+    url: `${BASE_URL}/gcapi/auth`,
+    data: { username: USERNAME, password: PASSWORD },
+  });
 
-    TOKEN = r.data?.token;
-    TOKEN_TIME = Date.now();
-
-    console.log("🔐 TOKEN OK");
-  } catch (e) {
-    console.log("❌ TOKEN ERROR:", e.message);
-  }
+  TOKEN = r.data?.token;
+  TOKEN_TIME = Date.now();
 }
 
 async function ensureToken() {
@@ -55,62 +67,69 @@ async function ensureToken() {
   }
 }
 
-function headers() {
-  return {
-    Authorization: `Bearer ${TOKEN}`,
-    "Content-Type": "application/json",
-  };
+
+// =========================
+// 🔐 TOKEN EXTRA
+// =========================
+async function ensureTokenExtra(key) {
+  const acc = ACCOUNTS_EXTRA[key];
+
+  if (!acc.token || Date.now() - acc.tokenTime > TOKEN_DURATION) {
+    const r = await axios({
+      httpsAgent: agent,
+      method: "post",
+      url: `${BASE_URL}/gcapi/auth`,
+      data: {
+        username: acc.username,
+        password: acc.password,
+      },
+    });
+
+    acc.token = r.data?.token;
+    acc.tokenTime = Date.now();
+  }
 }
 
-// 🔥 REQUEST BASE
+
+// =========================
+// 🔥 REQUEST ORIGINAL
+// =========================
 async function claroRequest(config) {
   await ensureToken();
 
-  let r = await axios({
+  return axios({
     httpsAgent: agent,
     timeout: 15000,
-    validateStatus: () => true,
     ...config,
     headers: {
-      ...headers(),
-      ...(config.headers || {}),
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
     },
   });
-
-  if (r.status === 401) {
-    await getToken();
-
-    r = await axios({
-      httpsAgent: agent,
-      timeout: 15000,
-      validateStatus: () => true,
-      ...config,
-      headers: {
-        ...headers(),
-        ...(config.headers || {}),
-      },
-    });
-  }
-
-  return r;
 }
 
-// 🔹 TOTAL SIMS
-async function getTotalSims() {
-  try {
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: { start: 0, length: 1 },
-    });
 
-    return r.data?.recordsFiltered || 0;
-  } catch {
-    return 0;
-  }
+// =========================
+// 🔥 REQUEST EXTRA
+// =========================
+async function claroRequestExtra(key, config) {
+  await ensureTokenExtra(key);
+
+  return axios({
+    httpsAgent: agent,
+    timeout: 15000,
+    ...config,
+    headers: {
+      Authorization: `Bearer ${ACCOUNTS_EXTRA[key].token}`,
+      "Content-Type": "application/json",
+    },
+  });
 }
 
-// 🔹 IMSI
+
+// =========================
+// 🔹 FUNCIONES GENERALES
+// =========================
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -121,169 +140,141 @@ function extractIMSI(item) {
   );
 }
 
-// 🔍 BUSCAR SIM
-async function fetchSim(value) {
-  try {
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: {
-        start: 0,
-        length: 10,
-        search: { value },
-      },
-    });
+function getDateRange() {
+  const now = new Date();
 
-    const items = r.data?.data || [];
+  let start, end;
 
-    return items.find(
-      (i) =>
-        String(i.iccid).trim() === String(value).trim() ||
-        String(i.msisdn).trim() === String(value).trim()
-    );
-
-  } catch {
-    return null;
+  if (now.getDate() >= 27) {
+    start = new Date(now.getFullYear(), now.getMonth(), 27);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
+    end = new Date(now.getFullYear(), now.getMonth(), 25);
   }
+
+  const format = (d) => d.toISOString().split("T")[0];
+
+  return { start: format(start), end: format(end) };
 }
 
-// 🔥 PLAN + IMSI
-async function getSimExtraData(sim) {
-  try {
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/get/sims`,
-      data: { msisdn: sim.msisdn },
-    });
 
-    const device = (r.data?.devices || []).find(
-      (d) => String(d.iccid) === String(sim.iccid)
-    );
+// =========================
+// 🔥 FUNCIONES CORE (GENERICAS)
+// =========================
+async function fetchSim(request, value) {
+  const r = await request({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: {
+      start: 0,
+      length: 10,
+      search: { value },
+    },
+  });
 
-    if (!device) return {};
+  const items = r.data?.data || [];
 
-    return {
-      imsi: device.imsi,
-      plan: device.devicePlans?.planName || "N/A",
-    };
-
-  } catch {
-    return {};
-  }
+  return items.find(
+    (i) =>
+      String(i.iccid).trim() === String(value).trim() ||
+      String(i.msisdn).trim() === String(value).trim()
+  );
 }
 
-// 🔥 CONSUMO ESTABLE Y RÁPIDO
-async function fetchUsage(imsi) {
-  try {
-    if (!imsi) return { consumoMB: 0 };
+async function getSimExtra(request, sim) {
+  const r = await request({
+    method: "post",
+    url: `${BASE_URL}/gcapi/get/sims`,
+    data: { msisdn: sim.msisdn },
+  });
 
-    // 🔥 CACHE
-    const cached = usageCache.get(imsi);
-    if (cached && Date.now() - cached.time < CACHE_TIME) {
-      return cached.data;
-    }
+  const device = (r.data?.devices || []).find(
+    (d) => String(d.iccid) === String(sim.iccid)
+  );
 
-    const now = new Date();
+  return {
+    imsi: device?.imsi,
+    plan: device?.devicePlans?.planName || "N/A",
+  };
+}
 
-    let start, end;
+async function getTotalSims(request) {
+  const r = await request({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: { start: 0, length: 1 },
+  });
 
-    if (now.getDate() >= 27) {
-      start = new Date(now.getFullYear(), now.getMonth(), 27);
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
-    } else {
-      start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
-      end = new Date(now.getFullYear(), now.getMonth(), 25);
-    }
+  return r.data?.recordsFiltered || 0;
+}
 
-    const format = (d) => d.toISOString().split("T")[0];
+async function fetchUsage(request, imsi) {
+  if (!imsi) return { consumoMB: 0 };
 
-    const dates = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      dates.push(format(new Date(d)));
-    }
+  const { start, end } = getDateRange();
 
-    let total = 0;
+  let total = 0;
 
-    // 🔥 EJECUTAR EN BLOQUES (más rápido sin romper API)
-    const chunkSize = 5;
+  const days = [];
+  let current = new Date(start);
 
-    for (let i = 0; i < dates.length; i += chunkSize) {
-      const chunk = dates.slice(i, i + chunkSize);
+  while (current <= new Date(end)) {
+    days.push(current.toISOString().split("T")[0]);
+    current.setDate(current.getDate() + 1);
+  }
 
-      const requests = chunk.map((date) =>
+  const chunkSize = 5;
+
+  for (let i = 0; i < days.length; i += chunkSize) {
+    const chunk = days.slice(i, i + chunkSize);
+
+    const results = await Promise.all(
+      chunk.map((d) =>
         Promise.all([
-          claroRequest({
+          request({
             method: "post",
             url: `${BASE_URL}/gcapi/simUplink/usage`,
-            data: { imsi, startDate: date, endDate: date },
+            data: { imsi, startDate: d, endDate: d },
           }).catch(() => null),
 
-          claroRequest({
+          request({
             method: "post",
             url: `${BASE_URL}/gcapi/simDownlink/usage`,
-            data: { imsi, startDate: date, endDate: date },
+            data: { imsi, startDate: d, endDate: d },
           }).catch(() => null),
         ])
+      )
+    );
+
+    for (const [up, down] of results) {
+      (up?.data?.object || []).forEach(
+        (i) => (total += Number(i["totalBytes(MB)"] || 0))
       );
-
-      const results = await Promise.all(requests);
-
-      for (const [up, down] of results) {
-        (up?.data?.object || []).forEach(
-          (i) => (total += Number(i["totalBytes(MB)"] || 0))
-        );
-
-        (down?.data?.object || []).forEach(
-          (i) => (total += Number(i["totalBytes(MB)"] || 0))
-        );
-      }
+      (down?.data?.object || []).forEach(
+        (i) => (total += Number(i["totalBytes(MB)"] || 0))
+      );
     }
-
-    // 🔥 SESSION ACTIVA
-    try {
-      const r = await claroRequest({
-        method: "post",
-        url: `${BASE_URL}/gcapi/device/sessionHistory`,
-        data: {
-          imsi,
-          startDate: format(start),
-          endDate: format(end),
-        },
-      });
-
-      (r.data?.data || []).forEach(
-        (s) => (total += Number(s.totalBytes || 0) / (1024 * 1024))
-      );
-
-    } catch {}
-
-    const result = { consumoMB: Number(total.toFixed(3)) };
-
-    usageCache.set(imsi, {
-      time: Date.now(),
-      data: result,
-    });
-
-    return result;
-
-  } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
-    return { consumoMB: 0 };
   }
+
+  return { consumoMB: Number(total.toFixed(3)) };
 }
 
-// 🔍 ENDPOINT PRINCIPAL
+
+// =========================
+// 🔥 ENDPOINT ORIGINAL (NO TOCAR)
+// =========================
 app.get("/api/device/full/:value", async (req, res) => {
   try {
-    const sim = await fetchSim(req.params.value);
+    const sim = await fetchSim(claroRequest, req.params.value);
     if (!sim) return res.json({ ok: false });
 
-    const extra = await getSimExtraData(sim);
+    const extra = await getSimExtra(claroRequest, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsage(imsi),
-      getTotalSims(),
+      fetchUsage(claroRequest, imsi),
+      getTotalSims(claroRequest),
     ]);
 
     res.json({
@@ -292,7 +283,7 @@ app.get("/api/device/full/:value", async (req, res) => {
       iccid: sim.iccid,
       msisdn: sim.msisdn,
       estado: sim.state,
-      plan: extra.plan || "N/A",
+      plan: extra.plan,
       consumoMB: consumo.consumoMB,
     });
 
@@ -301,13 +292,96 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (INTACTO)
-app.post("/api/device/reset/:value", async (req, res) => {
+
+// =========================
+// 🔥 ENDPOINT CUENTA 2
+// =========================
+app.get("/api2/device/full/:value", async (req, res) => {
   try {
-    const sim = await fetchSim(req.params.value);
+    const sim = await fetchSim(
+      (cfg) => claroRequestExtra("cuenta2", cfg),
+      req.params.value
+    );
+
     if (!sim) return res.json({ ok: false });
 
-    const extra = await getSimExtraData(sim);
+    const extra = await getSimExtra(
+      (cfg) => claroRequestExtra("cuenta2", cfg),
+      sim
+    );
+
+    const imsi = extra.imsi || extractIMSI(sim);
+
+    const [consumo, totalSims] = await Promise.all([
+      fetchUsage((cfg) => claroRequestExtra("cuenta2", cfg), imsi),
+      getTotalSims((cfg) => claroRequestExtra("cuenta2", cfg)),
+    ]);
+
+    res.json({
+      ok: true,
+      totalSims,
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      estado: sim.state,
+      plan: extra.plan,
+      consumoMB: consumo.consumoMB,
+    });
+
+  } catch {
+    res.json({ ok: false });
+  }
+});
+
+
+// =========================
+// 🔥 ENDPOINT CUENTA 3
+// =========================
+app.get("/api3/device/full/:value", async (req, res) => {
+  try {
+    const sim = await fetchSim(
+      (cfg) => claroRequestExtra("cuenta3", cfg),
+      req.params.value
+    );
+
+    if (!sim) return res.json({ ok: false });
+
+    const extra = await getSimExtra(
+      (cfg) => claroRequestExtra("cuenta3", cfg),
+      sim
+    );
+
+    const imsi = extra.imsi || extractIMSI(sim);
+
+    const [consumo, totalSims] = await Promise.all([
+      fetchUsage((cfg) => claroRequestExtra("cuenta3", cfg), imsi),
+      getTotalSims((cfg) => claroRequestExtra("cuenta3", cfg)),
+    ]);
+
+    res.json({
+      ok: true,
+      totalSims,
+      iccid: sim.iccid,
+      msisdn: sim.msisdn,
+      estado: sim.state,
+      plan: extra.plan,
+      consumoMB: consumo.consumoMB,
+    });
+
+  } catch {
+    res.json({ ok: false });
+  }
+});
+
+
+// =========================
+// 🔁 RESET (ORIGINAL)
+// =========================
+app.post("/api/device/reset/:value", async (req, res) => {
+  try {
+    const sim = await fetchSim(claroRequest, req.params.value);
+    if (!sim) return res.json({ ok: false });
+
+    const extra = await getSimExtra(claroRequest, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
     const r = await claroRequest({
@@ -323,6 +397,10 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
+
+// =========================
+// 🚀 START
+// =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER ESTABLE + RÁPIDO + FUNCIONANDO");
+  console.log("🚀 SERVER MULTICUENTA OK");
 });
