@@ -18,15 +18,15 @@ const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 const USERNAME = "alfben";
 const PASSWORD = "Soporte122@";
 
-// 🧠 TOKEN GLOBAL
+// 🔑 TOKEN GLOBAL
 let TOKEN = null;
 let TOKEN_TIME = 0;
-const TOKEN_DURATION = 50 * 60 * 1000; // 50 min
+const TOKEN_DURATION = 50 * 60 * 1000;
 
-// 🔥 OBTENER TOKEN
+// 🔥 GET TOKEN
 async function getToken() {
   try {
-    const response = await axios({
+    const r = await axios({
       httpsAgent: agent,
       method: "post",
       url: `${BASE_URL}/gcapi/auth`,
@@ -36,20 +36,17 @@ async function getToken() {
       },
     });
 
-    TOKEN = response.data?.token;
+    TOKEN = r.data?.token;
     TOKEN_TIME = Date.now();
 
-    console.log("🔐 NUEVO TOKEN GENERADO");
-
-    return TOKEN;
+    console.log("🔐 TOKEN RENOVADO");
 
   } catch (e) {
     console.log("❌ ERROR TOKEN:", e.message);
-    return null;
   }
 }
 
-// 🔥 VERIFICAR TOKEN
+// 🔥 VALIDAR TOKEN
 async function ensureToken() {
   if (!TOKEN || Date.now() - TOKEN_TIME > TOKEN_DURATION) {
     await getToken();
@@ -57,7 +54,7 @@ async function ensureToken() {
 }
 
 // 🔹 HEADERS
-function claroHeaders() {
+function headers() {
   return {
     Authorization: `Bearer ${TOKEN}`,
     "Content-Type": "application/json",
@@ -68,54 +65,36 @@ function claroHeaders() {
 async function claroRequest(config) {
   await ensureToken();
 
-  let response = await axios({
+  let r = await axios({
     httpsAgent: agent,
     timeout: 15000,
     validateStatus: () => true,
     ...config,
     headers: {
-      ...claroHeaders(),
+      ...headers(),
       ...(config.headers || {}),
     },
   });
 
-  // 🔥 SI TOKEN EXPIRÓ → REINTENTA
-  if (response.status === 401 || response.data?.error === "Unauthorized") {
-    console.log("♻️ TOKEN EXPIRADO, RENOVANDO...");
-
+  if (r.status === 401) {
     await getToken();
 
-    response = await axios({
+    r = await axios({
       httpsAgent: agent,
       timeout: 15000,
       validateStatus: () => true,
       ...config,
       headers: {
-        ...claroHeaders(),
+        ...headers(),
         ...(config.headers || {}),
       },
     });
   }
 
-  return response;
+  return r;
 }
 
-// 🔹 TOTAL SIMS
-async function getTotalSims() {
-  try {
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/list`,
-      data: { start: 0, length: 1 },
-    });
-
-    return r.data?.recordsFiltered || 0;
-  } catch {
-    return 0;
-  }
-}
-
-// 🔹 IMSI
+// 🔹 EXTRAER IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -129,7 +108,7 @@ function extractIMSI(item) {
 // 🔍 BUSCAR SIM
 async function fetchSim(value) {
   try {
-    const response = await claroRequest({
+    const r = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/device/list`,
       data: {
@@ -139,12 +118,12 @@ async function fetchSim(value) {
       },
     });
 
-    const items = response.data?.data || [];
+    const items = r.data?.data || [];
 
     return items.find(
-      (item) =>
-        String(item.iccid).trim() === String(value).trim() ||
-        String(item.msisdn).trim() === String(value).trim()
+      (i) =>
+        String(i.iccid).trim() === String(value).trim() ||
+        String(i.msisdn).trim() === String(value).trim()
     );
 
   } catch {
@@ -152,15 +131,13 @@ async function fetchSim(value) {
   }
 }
 
-// 🔥 PLAN + IMSI
+// 🔥 PLAN + IMSI REAL
 async function getSimExtraData(sim) {
   try {
     const r = await claroRequest({
       method: "post",
       url: `${BASE_URL}/gcapi/get/sims`,
-      data: {
-        msisdn: sim.msisdn,
-      },
+      data: { msisdn: sim.msisdn },
     });
 
     const device = (r.data?.devices || []).find(
@@ -179,28 +156,83 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO (simple pero estable)
+// 🔥 CONSUMO REAL (CORREGIDO)
 async function fetchUsage(imsi) {
   try {
-    const r = await claroRequest({
-      method: "post",
-      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-      data: { imsi },
-    });
+    if (!imsi) return { consumoMB: 0 };
 
-    const total =
-      Number(r.data?.data?.totalMB) ||
-      Number(r.data?.data?.totalBytes) / (1024 * 1024) ||
-      0;
+    const now = new Date();
+
+    let start, end;
+
+    if (now.getDate() >= 27) {
+      start = new Date(now.getFullYear(), now.getMonth(), 27);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
+      end = new Date(now.getFullYear(), now.getMonth(), 25);
+    }
+
+    const format = (d) => d.toISOString().split("T")[0];
+
+    const dates = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      dates.push(format(new Date(d)));
+    }
+
+    let total = 0;
+
+    for (const date of dates) {
+      const [up, down] = await Promise.all([
+        claroRequest({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simUplink/usage`,
+          data: { imsi, startDate: date, endDate: date },
+        }).catch(() => null),
+
+        claroRequest({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simDownlink/usage`,
+          data: { imsi, startDate: date, endDate: date },
+        }).catch(() => null),
+      ]);
+
+      (up?.data?.object || []).forEach(
+        (i) => (total += Number(i["totalBytes(MB)"] || 0))
+      );
+
+      (down?.data?.object || []).forEach(
+        (i) => (total += Number(i["totalBytes(MB)"] || 0))
+      );
+    }
+
+    // 🔥 SESIÓN ACTIVA
+    try {
+      const r = await claroRequest({
+        method: "post",
+        url: `${BASE_URL}/gcapi/device/sessionHistory`,
+        data: {
+          imsi,
+          startDate: format(start),
+          endDate: format(end),
+        },
+      });
+
+      (r.data?.data || []).forEach(
+        (s) => (total += Number(s.totalBytes || 0) / (1024 * 1024))
+      );
+
+    } catch {}
 
     return { consumoMB: Number(total.toFixed(3)) };
 
-  } catch {
+  } catch (e) {
+    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// 🔍 API PRINCIPAL
+// 🔍 ENDPOINT PRINCIPAL
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -210,14 +242,10 @@ app.get("/api/device/full/:value", async (req, res) => {
 
     const imsi = extra.imsi || extractIMSI(sim);
 
-    const [consumo, totalSims] = await Promise.all([
-      fetchUsage(imsi),
-      getTotalSims(),
-    ]);
+    const consumo = await fetchUsage(imsi);
 
     res.json({
       ok: true,
-      totalSims,
       iccid: sim.iccid,
       msisdn: sim.msisdn,
       estado: sim.state,
@@ -230,7 +258,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (NO SE ROMPE)
+// 🔁 RESET (FUNCIONANDO)
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -253,5 +281,5 @@ app.post("/api/device/reset/:value", async (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON TOKEN AUTO");
+  console.log("🚀 SERVER FINAL FUNCIONANDO");
 });
