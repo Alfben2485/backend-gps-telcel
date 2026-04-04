@@ -128,7 +128,7 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO REAL (UP + DOWN + CACHE + PARALELO)
+// 🔥 CONSUMO REAL TOTAL
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
@@ -162,6 +162,7 @@ async function fetchUsage(imsi) {
     let total = 0;
     const BATCH_SIZE = 6;
 
+    // 🔥 UPLINK + DOWNLINK
     for (let i = 0; i < dates.length; i += BATCH_SIZE) {
       const batch = dates.slice(i, i + BATCH_SIZE);
 
@@ -203,6 +204,28 @@ async function fetchUsage(imsi) {
       });
     }
 
+    // 🔥 SESSION HISTORY (SESIONES ACTIVAS)
+    try {
+      const r = await claroRequest({
+        method: "post",
+        url: `${BASE_URL}/gcapi/device/sessionHistory`,
+        data: {
+          imsi: imsi,
+          startDate: format(start),
+          endDate: format(end),
+        },
+      });
+
+      const sessions = r.data?.data || [];
+
+      sessions.forEach((s) => {
+        total += Number(s.totalBytes || 0) / (1024 * 1024);
+      });
+
+    } catch {
+      console.log("⚠️ sessionHistory falló");
+    }
+
     const result = {
       consumoMB: Number(total.toFixed(3)),
     };
@@ -212,17 +235,16 @@ async function fetchUsage(imsi) {
       data: result,
     });
 
-    console.log("🔥 CONSUMO TOTAL:", total);
+    console.log("🔥 CONSUMO FINAL:", total);
 
     return result;
 
   } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
     return { consumoMB: 0 };
   }
 }
 
-// 🔍 ENDPOINT
+// 🔍 ENDPOINT PRINCIPAL
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -256,7 +278,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-// 🔁 RESET (FUNCIONANDO)
+// 🔁 RESET
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -299,5 +321,5 @@ app.get("/", (req, res) => {
 
 // START
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Servidor PRO listo");
+  console.log("🚀 Servidor FINAL listo");
 });
