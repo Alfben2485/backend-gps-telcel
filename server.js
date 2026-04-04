@@ -23,7 +23,7 @@ let TOKEN = null;
 let TOKEN_TIME = 0;
 const TOKEN_DURATION = 50 * 60 * 1000;
 
-// 🔥 GET TOKEN
+// 🔥 TOKEN
 async function getToken() {
   try {
     const r = await axios({
@@ -40,13 +40,11 @@ async function getToken() {
     TOKEN_TIME = Date.now();
 
     console.log("🔐 TOKEN RENOVADO");
-
   } catch (e) {
     console.log("❌ ERROR TOKEN:", e.message);
   }
 }
 
-// 🔥 VALIDAR TOKEN
 async function ensureToken() {
   if (!TOKEN || Date.now() - TOKEN_TIME > TOKEN_DURATION) {
     await getToken();
@@ -61,7 +59,7 @@ function headers() {
   };
 }
 
-// 🔥 REQUEST CON AUTO-RETRY
+// 🔥 REQUEST BASE
 async function claroRequest(config) {
   await ensureToken();
 
@@ -93,7 +91,8 @@ async function claroRequest(config) {
 
   return r;
 }
-// 🔹 TOTAL SIMS
+
+// 🔹 TOTAL SIMS (RESTAURADO)
 async function getTotalSims() {
   try {
     const r = await claroRequest({
@@ -101,13 +100,14 @@ async function getTotalSims() {
       url: `${BASE_URL}/gcapi/device/list`,
       data: { start: 0, length: 1 },
     });
+
     return r.data?.recordsFiltered || 0;
   } catch {
     return 0;
   }
 }
 
-// 🔹 EXTRAER IMSI
+// 🔹 IMSI
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -144,7 +144,7 @@ async function fetchSim(value) {
   }
 }
 
-// 🔥 PLAN + IMSI REAL
+// 🔥 PLAN + IMSI
 async function getSimExtraData(sim) {
   try {
     const r = await claroRequest({
@@ -169,7 +169,7 @@ async function getSimExtraData(sim) {
   }
 }
 
-// 🔥 CONSUMO REAL (CORREGIDO)
+// 🔥 CONSUMO REAL
 async function fetchUsage(imsi) {
   try {
     if (!imsi) return { consumoMB: 0 };
@@ -219,7 +219,7 @@ async function fetchUsage(imsi) {
       );
     }
 
-    // 🔥 SESIÓN ACTIVA
+    // SESSION HISTORY
     try {
       const r = await claroRequest({
         method: "post",
@@ -239,26 +239,28 @@ async function fetchUsage(imsi) {
 
     return { consumoMB: Number(total.toFixed(3)) };
 
-  } catch (e) {
-    console.log("❌ ERROR CONSUMO:", e.message);
+  } catch {
     return { consumoMB: 0 };
   }
 }
 
-// 🔍 ENDPOINT PRINCIPAL
+// 🔍 ENDPOINT PRINCIPAL (ARREGLADO)
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
     if (!sim) return res.json({ ok: false });
 
     const extra = await getSimExtraData(sim);
-
     const imsi = extra.imsi || extractIMSI(sim);
 
-    const consumo = await fetchUsage(imsi);
+    const [consumo, totalSims] = await Promise.all([
+      fetchUsage(imsi),
+      getTotalSims(),
+    ]);
 
     res.json({
       ok: true,
+      totalSims,
       iccid: sim.iccid,
       msisdn: sim.msisdn,
       estado: sim.state,
@@ -266,12 +268,12 @@ app.get("/api/device/full/:value", async (req, res) => {
       consumoMB: consumo.consumoMB,
     });
 
-  } catch (e) {
+  } catch {
     res.json({ ok: false });
   }
 });
 
-// 🔁 RESET (FUNCIONANDO)
+// 🔁 RESET
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(req.params.value);
@@ -293,6 +295,7 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
+// START
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER FINAL FUNCIONANDO");
+  console.log("🚀 SERVER FINAL COMPLETO OK");
 });
