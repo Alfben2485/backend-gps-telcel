@@ -131,19 +131,16 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO CORREGIDO: 28 → 27 (estándar de facturación)
+// 🔥 CICLO DE FACTURACIÓN: 28 → 27 (estándar Claro)
 // =========================
 function getDateRange() {
   const now = new Date();
   let start, end;
 
-  // Día de corte: 28
   if (now.getDate() >= 28) {
-    // Ciclo actual: 28 de este mes → 27 del próximo
     start = new Date(now.getFullYear(), now.getMonth(), 28);
     end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
   } else {
-    // Ciclo anterior: 28 del mes pasado → 27 de este mes
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
     end = new Date(now.getFullYear(), now.getMonth(), 27);
   }
@@ -153,37 +150,55 @@ function getDateRange() {
 }
 
 // =========================
-// 🔥 CONSUMO USANDO ENDPOINT CONFIABLE /device/dataUsage
+// 🔥 CONSUMO CON ENDPOINT CONFIABLE /consumed/usage (con chunking de 3 días)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const { start, end } = getDateRange();
 
-  // Formato de fecha requerido por la API: "YYYY-MM-DD HH:MM"
-  const fromDate = `${start} 00:00`;
-  const toDate = `${end} 23:59`;
+  // Convertir fechas a objetos Date para iterar
+  let startDate = new Date(start);
+  let endDate = new Date(end);
+  
+  let totalMB = 0;
+  let currentStart = new Date(startDate);
 
-  try {
-    const response = await request({
-      method: "get",
-      url: `${BASE_URL}/gcapi/device/dataUsage`,
-      params: {
-        imsi: imsi,
-        fromDate: fromDate,
-        toDate: toDate,
-      },
-    });
+  // El endpoint /consumed/usage solo permite máximo 3 días por llamada
+  while (currentStart <= endDate) {
+    let currentEnd = new Date(currentStart);
+    currentEnd.setDate(currentEnd.getDate() + 2); // rango de 3 días
+    if (currentEnd > endDate) currentEnd = new Date(endDate);
 
-    // El campo totalUsage viene en bytes
-    const totalBytes = response.data?.totalUsage || 0;
-    const totalMB = totalBytes / (1024 * 1024);
+    // Formato requerido: "YYYY-MM-DD HH:MM:SS"
+    const fromDateTime = `${currentStart.toISOString().split("T")[0]} 00:00:00`;
+    const toDateTime = `${currentEnd.toISOString().split("T")[0]} 23:59:59`;
 
-    return { consumoMB: Number(totalMB.toFixed(3)) };
-  } catch (error) {
-    console.error("Error en fetchUsage:", error?.response?.data || error.message);
-    return { consumoMB: 0 };
+    try {
+      const response = await request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/consumed/usage`,
+        data: {
+          imsis: imsi,
+          startTime: fromDateTime,
+          stopTime: toDateTime,
+          offset: "0",
+          limit: "1"
+        }
+      });
+
+      // La respuesta tiene un objeto "usage" con "data" que contiene "dataTotalUsage" en MB
+      const dataUsage = response.data?.usage?.data?.dataTotalUsage || 0;
+      totalMB += parseFloat(dataUsage);
+    } catch (err) {
+      console.error("Error en chunk de consumo:", err.message);
+    }
+
+    // Avanzar al siguiente día (inicio del siguiente chunk)
+    currentStart.setDate(currentEnd.getDate() + 1);
   }
+
+  return { consumoMB: Number(totalMB.toFixed(3)) };
 }
 
 // =========================
