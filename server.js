@@ -139,16 +139,14 @@ function getDateRange() {
   const now = new Date();
   let start;
 
-  // Día de inicio: 28 del mes actual o del anterior
   if (now.getDate() >= 28) {
     start = new Date(now.getFullYear(), now.getMonth(), 28);
   } else {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
   }
 
-  // Fecha final: ayer (para evitar fechas futuras)
   const end = new Date(now);
-  end.setDate(now.getDate() - 1);
+  end.setDate(now.getDate() - 1); // ayer
 
   const format = (d) => d.toISOString().split("T")[0];
   return { start: format(start), end: format(end) };
@@ -161,44 +159,21 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 FUNCIÓN PARA OBTENER EL entAccount.id DEL DISPOSITIVO
+// 🔧 FACTORES DE CORRECCIÓN
 // =========================
-let cachedAccountId = null;
-let cachedAccountIdImsi = null;
+// Factor global (se aplica a todas las SIMs que no tengan factor específico)
+const FACTOR_GLOBAL = 2.262; // Ajusta este valor según la relación real de tus SIMs
 
-async function getDeviceAccountId(request, imsi) {
-  if (cachedAccountIdImsi === imsi && cachedAccountId && Date.now() - cachedAccountId.time < CACHE_TIME) {
-    return cachedAccountId.id;
-  }
-
-  try {
-    const res = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/get/sims`,
-      data: { imsis: imsi }
-    });
-    
-    const device = res.data?.devices?.find(d => d.imsi === imsi);
-    if (device && device.entAccount && device.entAccount.id) {
-      const accountId = device.entAccount.id;
-      console.log(`📌 Account ID (entAccount.id) obtenido para IMSI ${imsi}: ${accountId}`);
-      cachedAccountId = { id: accountId, time: Date.now() };
-      cachedAccountIdImsi = imsi;
-      return accountId;
-    } else {
-      console.log(`⚠️ No se encontró entAccount.id para IMSI ${imsi}.`);
-      return null;
-    }
-  } catch (err) {
-    console.error(`❌ Error al obtener entAccount.id: ${err.message}`);
-    return null;
-  }
-}
+// Factores específicos por ICCID (sobrescriben al global)
+const FACTORES_POR_ICCID = {
+  // Ejemplo: "8952020022249322888": 2.262,
+  // Agrega aquí otros ICCID con su factor si la relación es diferente
+};
 
 // =========================
-// 🔥 CONSUMO REAL (prioriza /sim/Data/Usage, fallback día por día)
+// 🔥 CONSUMO DÍA POR DÍA + SESSION HISTORY (método fiable)
 // =========================
-async function fetchUsage(request, imsi) {
+async function fetchUsage(request, imsi, iccid) {
   if (!imsi) return { consumoMB: 0 };
 
   const cached = usageCache.get(imsi);
@@ -208,69 +183,9 @@ async function fetchUsage(request, imsi) {
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período facturación (real): ${start} → ${end}`);
+  console.log(`📅 Período facturación: ${start} → ${end}`);
 
-  const accountId = await getDeviceAccountId(request, imsi);
-  if (!accountId) {
-    console.log(`❌ No se pudo obtener accountId, usando método día por día.`);
-    return await fetchUsageDayByDay(request, imsi, start, end);
-  }
-  console.log(`🏢 Usando Account ID: ${accountId}`);
-
-  let totalMB = 0;
-
-  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
-  try {
-    const res = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-      data: {
-        startDate: start,
-        endDate: end,
-        offset: 0,
-        limit: 100,
-        imsi: imsi,
-        accountId: accountId,
-      },
-      timeout: 15000,
-    });
-
-    if (!usageCache.has(imsi)) {
-      console.log("📦 Respuesta de /sim/Data/Usage:", JSON.stringify(res.data, null, 2));
-    }
-
-    const items = res.data?.object || [];
-    let totalKB = 0;
-    for (const item of items) {
-      if (item.servedImsi === imsi) {
-        totalKB += parseFloat(item.totalBytesInKb || 0);
-      }
-    }
-    totalMB = totalKB / 1024;
-    if (totalMB > 0) {
-      console.log(`✅ /sim/Data/Usage → ${totalMB.toFixed(3)} MB`);
-    } else {
-      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB, usando método día por día.`);
-      return await fetchUsageDayByDay(request, imsi, start, end);
-    }
-  } catch (err) {
-    console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
-    console.log(`🔄 Cambiando a método día por día...`);
-    return await fetchUsageDayByDay(request, imsi, start, end);
-  }
-
-  const result = { consumoMB: Number(totalMB.toFixed(3)) };
-  usageCache.set(imsi, { time: Date.now(), data: result });
-  console.log(`🎯 CONSUMO TOTAL FINAL: ${result.consumoMB} MB`);
-  return result;
-}
-
-// =========================
-// 🔥 MÉTODO DÍA POR DÍA (FALLBACK) - usando fechas hasta hoy
-// =========================
-async function fetchUsageDayByDay(request, imsi, start, end) {
-  console.log(`📆 Usando método día por día desde ${start} hasta ${end}`);
-
+  // Generar lista de fechas
   const dates = [];
   let current = new Date(start);
   const endDate = new Date(end);
@@ -282,6 +197,7 @@ async function fetchUsageDayByDay(request, imsi, start, end) {
   let totalMB = 0;
   const BATCH_SIZE = 6;
 
+  // UPLINK + DOWNLINK día por día
   for (let i = 0; i < dates.length; i += BATCH_SIZE) {
     const batch = dates.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
@@ -308,8 +224,37 @@ async function fetchUsageDayByDay(request, imsi, start, end) {
     }
   }
 
-  console.log(`📊 Método día por día → ${totalMB.toFixed(3)} MB`);
-  return { consumoMB: Number(totalMB.toFixed(3)) };
+  // SESSION HISTORY (sesiones activas)
+  try {
+    const sessionRes = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/sessionHistory`,
+      data: { imsi, startDate: start, endDate: end }
+    });
+    const sessions = sessionRes.data?.data || [];
+    let sessionMB = 0;
+    for (const s of sessions) {
+      sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
+    }
+    if (sessionMB > 0) {
+      console.log(`➕ SessionHistory añade: ${sessionMB.toFixed(3)} MB`);
+      totalMB += sessionMB;
+    }
+  } catch (err) {
+    console.log(`⚠️ sessionHistory falló: ${err.message}`);
+  }
+
+  // Aplicar factor de corrección
+  const factor = FACTORES_POR_ICCID[iccid] || FACTOR_GLOBAL;
+  const consumoCorregido = totalMB * factor;
+  const rounded = Number(consumoCorregido.toFixed(3));
+
+  console.log(`📊 Consumo base (API): ${totalMB.toFixed(3)} MB`);
+  console.log(`🔧 Factor aplicado: ${factor} → Consumo final: ${rounded} MB`);
+
+  const result = { consumoMB: rounded };
+  usageCache.set(imsi, { time: Date.now(), data: result });
+  return result;
 }
 
 // =========================
@@ -363,7 +308,7 @@ async function getTotalSims(request) {
 }
 
 // =========================
-// 🔥 ENDPOINTS + RESET (sin cambios)
+// 🔥 ENDPOINTS + RESET
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
@@ -379,7 +324,7 @@ function buildEndpoint(path, requestFn) {
       const imsi = extra.imsi || extractIMSI(sim);
 
       const [consumo, totalSims] = await Promise.all([
-        fetchUsage(requestFn, imsi),
+        fetchUsage(requestFn, imsi, sim.iccid),
         getTotalSims(requestFn),
       ]);
 
@@ -436,7 +381,8 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER DEFINITIVO - CONSUMO REAL DESDE 28 HASTA AYER");
-  console.log("📅 Rango de fechas: 28 del período → ayer");
-  console.log("🔧 Fallback automático a día por día si falla el endpoint principal");
+  console.log("🚀 SERVER DEFINITIVO - CONSUMO DÍA POR DÍA + FACTOR DE CORRECCIÓN");
+  console.log(`📅 Ciclo facturación: 28 → ayer`);
+  console.log(`🔧 Factor global: ${FACTOR_GLOBAL}`);
+  console.log(`📌 Para factores específicos, edita el objeto FACTORES_POR_ICCID`);
 });
