@@ -211,7 +211,7 @@ async function getTotalSims(request) {
 
 
 // =========================
-// 🔥 CONSUMO (NO TOCAR)
+// 🔥 CONSUMO (FIX REAL)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -252,16 +252,33 @@ async function fetchUsage(request, imsi) {
     );
 
     for (const [up, down] of results) {
-      (up?.data?.object || []).forEach(
-        (i) => (total += Number(i["totalBytes(MB)"] || 0))
-      );
-      (down?.data?.object || []).forEach(
-        (i) => (total += Number(i["totalBytes(MB)"] || 0))
-      );
+
+      const process = (item) => {
+        if (!item) return 0;
+
+        if (item["totalBytes(MB)"] !== undefined) {
+          return Number(item["totalBytes(MB)"]);
+        }
+
+        if (item["totalBytes"] !== undefined) {
+          return Number(item["totalBytes"]) / (1024 * 1024);
+        }
+
+        if (item["totalKB"] !== undefined) {
+          return Number(item["totalKB"]) / 1024;
+        }
+
+        return 0;
+      };
+
+      (up?.data?.object || []).forEach(i => total += process(i));
+      (down?.data?.object || []).forEach(i => total += process(i));
     }
   }
 
-  return { consumoMB: Number(total.toFixed(3)) };
+  return {
+    consumoMB: Number(total.toFixed(3)),
+  };
 }
 
 
@@ -298,7 +315,6 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-
 // CUENTA 2
 app.get("/api2/device/full/:value", async (req, res) => {
   try {
@@ -329,7 +345,6 @@ app.get("/api2/device/full/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
-
 
 // CUENTA 3
 app.get("/api3/device/full/:value", async (req, res) => {
@@ -364,7 +379,7 @@ app.get("/api3/device/full/:value", async (req, res) => {
 
 
 // =========================
-// 🔁 RESET
+// 🔁 RESET (NO TOCAR)
 // =========================
 
 // CUENTA 1
@@ -389,7 +404,6 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
-
 // CUENTA 2
 app.post("/api2/device/reset/:value", async (req, res) => {
   try {
@@ -413,7 +427,6 @@ app.post("/api2/device/reset/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
-
 
 // CUENTA 3
 app.post("/api3/device/reset/:value", async (req, res) => {
