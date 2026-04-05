@@ -130,18 +130,16 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 CORRECCIÓN AQUÍ
+// 🔥 CICLO CORRECTO 28 → 26
 function getDateRange() {
   const now = new Date();
 
   let start, end;
 
   if (now.getDate() >= 27) {
-    // ciclo actual
     start = new Date(now.getFullYear(), now.getMonth(), 28);
     end = new Date(now.getFullYear(), now.getMonth() + 1, 26);
   } else {
-    // ciclo anterior
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
     end = new Date(now.getFullYear(), now.getMonth(), 26);
   }
@@ -202,7 +200,7 @@ async function getTotalSims(request) {
 }
 
 // =========================
-// 🔥 CONSUMO (YA CORRECTO)
+// 🔥 CONSUMO (FIX REAL)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -211,38 +209,59 @@ async function fetchUsage(request, imsi) {
 
   let total = 0;
 
-  const rUp = await request({
-    method: "post",
-    url: `${BASE_URL}/gcapi/simUplink/usage`,
-    data: { imsi, startDate: start, endDate: end },
-  }).catch(() => null);
+  const days = [];
+  let current = new Date(start);
 
-  const rDown = await request({
-    method: "post",
-    url: `${BASE_URL}/gcapi/simDownlink/usage`,
-    data: { imsi, startDate: start, endDate: end },
-  }).catch(() => null);
+  while (current <= new Date(end)) {
+    days.push(current.toISOString().split("T")[0]);
+    current.setDate(current.getDate() + 1);
+  }
 
-  const process = (item) => {
-    if (!item) return 0;
+  const chunkSize = 5;
 
-    if (item["totalBytes(MB)"] !== undefined) return Number(item["totalBytes(MB)"]);
-    if (item["totalBytes"] !== undefined) return Number(item["totalBytes"]) / (1024 * 1024);
-    if (item["totalKB"] !== undefined) return Number(item["totalKB"]) / 1024;
+  for (let i = 0; i < days.length; i += chunkSize) {
+    const chunk = days.slice(i, i + chunkSize);
 
-    return 0;
-  };
+    const results = await Promise.all(
+      chunk.map((d) =>
+        Promise.all([
+          request({
+            method: "post",
+            url: `${BASE_URL}/gcapi/simUplink/usage`,
+            data: { imsi, startDate: d, endDate: d },
+          }).catch(() => null),
 
-  (rUp?.data?.object || []).forEach(i => total += process(i));
-  (rDown?.data?.object || []).forEach(i => total += process(i));
+          request({
+            method: "post",
+            url: `${BASE_URL}/gcapi/simDownlink/usage`,
+            data: { imsi, startDate: d, endDate: d },
+          }).catch(() => null),
+        ])
+      )
+    );
 
-  return {
-    consumoMB: Number(total.toFixed(3)),
-  };
+    for (const [up, down] of results) {
+
+      const parse = (item) => {
+        if (!item) return 0;
+
+        if (item["totalBytes(MB)"] !== undefined) return Number(item["totalBytes(MB)"]);
+        if (item["totalBytes"] !== undefined) return Number(item["totalBytes"]) / (1024 * 1024);
+        if (item["totalKB"] !== undefined) return Number(item["totalKB"]) / 1024;
+
+        return 0;
+      };
+
+      (up?.data?.object || []).forEach(i => total += parse(i));
+      (down?.data?.object || []).forEach(i => total += parse(i));
+    }
+  }
+
+  return { consumoMB: Number(total.toFixed(3)) };
 }
 
 // =========================
-// 🔥 ENDPOINTS
+// 🔥 ENDPOINTS + RESET (SIN CAMBIOS)
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
@@ -274,13 +293,6 @@ function buildEndpoint(path, requestFn) {
   });
 }
 
-buildEndpoint("/api/device/full/:value", claroRequest);
-buildEndpoint("/api2/device/full/:value", (cfg) => claroRequestExtra("cuenta2", cfg));
-buildEndpoint("/api3/device/full/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
-
-// =========================
-// 🔁 RESET (TODAS LAS CUENTAS)
-// =========================
 function buildReset(path, requestFn) {
   app.post(path, async (req, res) => {
     try {
@@ -304,6 +316,10 @@ function buildReset(path, requestFn) {
   });
 }
 
+buildEndpoint("/api/device/full/:value", claroRequest);
+buildEndpoint("/api2/device/full/:value", (cfg) => claroRequestExtra("cuenta2", cfg));
+buildEndpoint("/api3/device/full/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
+
 buildReset("/api/device/reset/:value", claroRequest);
 buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cfg));
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
@@ -312,5 +328,5 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER PERFECTO (MISMO CONSUMO QUE CLARO)");
+  console.log("🚀 SERVER 100% FUNCIONAL");
 });
