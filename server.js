@@ -152,22 +152,18 @@ function getDateRange() {
 }
 
 // =========================
-// 🧠 CACHE (2 minutos)
-// =========================
-const usageCache = new Map();
-const CACHE_TIME = 2 * 60 * 1000;
-
-// =========================
-// 🔥 OBTENER ACCOUNT ID DESDE TOKEN (opcional)
+// 🔥 OBTENER ACCOUNT ID DEL USUARIO AUTENTICADO
 // =========================
 let cachedAccountId = null;
+
 async function getAccountId(request) {
   if (cachedAccountId) return cachedAccountId;
   try {
-    // Intentar obtener el accountId del usuario actual
+    // Obtener información del usuario desde el token
     const res = await request({
       method: "get",
-      url: `${BASE_URL}/gcapi/users?start=0&size=1`,
+      url: `${BASE_URL}/gcapi/users`,
+      params: { start: 0, size: 1 },
     });
     const users = res.data?.users;
     if (users && users.length > 0 && users[0].account && users[0].account.id) {
@@ -175,33 +171,52 @@ async function getAccountId(request) {
       console.log(`📌 Account ID obtenido: ${cachedAccountId}`);
       return cachedAccountId;
     }
-  } catch (e) {
-    console.log("No se pudo obtener accountId automáticamente");
+    // Fallback: intentar con el endpoint de account (podrías tener un ID conocido)
+    const accountRes = await request({
+      method: "get",
+      url: `${BASE_URL}/gcapi/account/1`, // Prueba con ID 1
+    });
+    if (accountRes.data && accountRes.data.id) {
+      cachedAccountId = accountRes.data.id;
+      console.log(`📌 Account ID por fallback: ${cachedAccountId}`);
+      return cachedAccountId;
+    }
+  } catch (err) {
+    console.log("⚠️ No se pudo obtener Account ID automáticamente, usando valor por defecto 12");
   }
-  // Fallback: el accountId del ejemplo (12) o el del token anterior (789)
-  return 12; // Puedes cambiar a 789 si es necesario
+  cachedAccountId = 12; // Valor por defecto (puede ser el de tu cuenta)
+  return cachedAccountId;
 }
 
 // =========================
-// 🔥 CONSUMO DEFINITIVO usando /gcapi/sim/Data/Usage (consolidado)
+// 🧠 CACHE PARA CONSUMO (2 minutos)
+// =========================
+const usageCache = new Map();
+const CACHE_TIME = 2 * 60 * 1000;
+
+// =========================
+// 🔥 CONSUMO REAL USANDO /gcapi/sim/Data/Usage
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
-    console.log(`⚡ Caché → ${cached.data.consumoMB} MB`);
+    console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
     return cached.data;
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período: ${start} → ${end}`);
+  console.log(`📅 Período facturación: ${start} → ${end}`);
 
   const accountId = await getAccountId(request);
-  console.log(`🔢 Usando accountId: ${accountId}`);
+  console.log(`🏢 Usando Account ID: ${accountId}`);
 
+  let totalMB = 0;
+
+  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
   try {
-    const response = await request({
+    const res = await request({
       method: "post",
       url: `${BASE_URL}/gcapi/sim/Data/Usage`,
       data: {
@@ -209,33 +224,86 @@ async function fetchUsage(request, imsi) {
         endDate: end,
         offset: 0,
         limit: 100,
+        imsi: imsi,
         accountId: accountId,
-        imsi: imsi
       },
       timeout: 15000,
     });
 
-    console.log("📦 Respuesta completa de sim/Data/Usage:", JSON.stringify(response.data, null, 2));
+    console.log("📦 Respuesta completa de /sim/Data/Usage:", JSON.stringify(res.data, null, 2));
 
-    const items = response.data?.object || [];
+    const items = res.data?.object || [];
     let totalKB = 0;
     for (const item of items) {
       if (item.servedImsi === imsi) {
         totalKB += parseFloat(item.totalBytesInKb || 0);
       }
     }
-    const totalMB = totalKB / 1024;
-    const rounded = Number(totalMB.toFixed(3));
-    console.log(`✅ Consumo real desde sim/Data/Usage: ${rounded} MB`);
-
-    const result = { consumoMB: rounded };
-    usageCache.set(imsi, { time: Date.now(), data: result });
-    return result;
+    const mbFromDataUsage = totalKB / 1024;
+    if (mbFromDataUsage > 0) {
+      console.log(`✅ /sim/Data/Usage → ${mbFromDataUsage.toFixed(3)} MB`);
+      totalMB = mbFromDataUsage;
+    } else {
+      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB, intentando método alternativo...`);
+    }
   } catch (err) {
-    console.error("❌ Error en sim/Data/Usage:", err.message);
-    if (err.response) console.error("Detalle:", err.response.data);
-    return { consumoMB: 0 };
+    console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
   }
+
+  // MÉTODO ALTERNATIVO: /gcapi/consumed/usage (si el principal falla)
+  if (totalMB === 0) {
+    try {
+      const fromDateTime = `${start} 00:00:00`;
+      const toDateTime = `${end} 23:59:59`;
+      const res = await request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/consumed/usage`,
+        data: {
+          imsis: imsi,
+          startTime: fromDateTime,
+          stopTime: toDateTime,
+          offset: "0",
+          limit: "1",
+        },
+        timeout: 15000,
+      });
+      const dataUsage = res.data?.usage?.data?.dataTotalUsage || 0;
+      const mbFromConsumed = parseFloat(dataUsage);
+      if (mbFromConsumed > 0) {
+        console.log(`✅ /consumed/usage → ${mbFromConsumed.toFixed(3)} MB`);
+        totalMB = mbFromConsumed;
+      }
+    } catch (err) {
+      console.error(`❌ Error en /consumed/usage: ${err.message}`);
+    }
+  }
+
+  // MÉTODO DE RESERVA: /gcapi/device/dataUsage (en bytes)
+  if (totalMB === 0) {
+    try {
+      const fromDate = `${start} 00:00`;
+      const toDate = `${end} 23:59`;
+      const res = await request({
+        method: "get",
+        url: `${BASE_URL}/gcapi/device/dataUsage`,
+        params: { imsi, fromDate, toDate },
+        timeout: 10000,
+      });
+      const bytes = res.data?.totalUsage || 0;
+      const mbFromBytes = bytes / (1024 * 1024);
+      if (mbFromBytes > 0) {
+        console.log(`✅ /device/dataUsage → ${mbFromBytes.toFixed(3)} MB`);
+        totalMB = mbFromBytes;
+      }
+    } catch (err) {
+      console.error(`❌ Error en /device/dataUsage: ${err.message}`);
+    }
+  }
+
+  const result = { consumoMB: Number(totalMB.toFixed(3)) };
+  usageCache.set(imsi, { time: Date.now(), data: result });
+  console.log(`🎯 CONSUMO TOTAL FINAL: ${result.consumoMB} MB`);
+  return result;
 }
 
 // =========================
@@ -289,14 +357,11 @@ async function getTotalSims(request) {
 }
 
 // =========================
-// 🔥 ENDPOINTS + RESET
+// 🔥 ENDPOINTS + RESET (sin cambios)
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
-    const timeout = setTimeout(() => {
-      res.json({ ok: false, error: "Timeout" });
-    }, 25000);
-
+    const timeout = setTimeout(() => res.json({ ok: false, error: "Timeout" }), 25000);
     try {
       const sim = await fetchSim(requestFn, req.params.value);
       if (!sim) {
@@ -365,7 +430,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON sim/Data/Usage (consumo consolidado real)");
+  console.log("🚀 SERVER DEFINITIVO - USANDO /sim/Data/Usage CON ACCOUNT ID AUTOMÁTICO");
   console.log("📅 Ciclo facturación: 28 → 27");
-  console.log("🔍 Revisa la consola para ver la respuesta de la API");
+  console.log("🔍 Revisa la consola para ver la respuesta completa de la API");
 });
