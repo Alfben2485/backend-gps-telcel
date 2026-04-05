@@ -130,7 +130,7 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 CICLO ORIGINAL (28 → 26) - SIN CAMBIOS
+// 🔥 CICLO ORIGINAL (28 → 26) - AJUSTA A 27 SI LA PLATAFORMA USA OTRO CORTE
 function getDateRange() {
   const now = new Date();
 
@@ -150,63 +150,35 @@ function getDateRange() {
 }
 
 // =========================
-// 🔥 CONSUMO OPTIMIZADO (chunks de 7 días, rápido y preciso)
+// 🔥 CONSUMO RÁPIDO Y PRECISO (UNA SOLA LLAMADA)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const { start, end } = getDateRange();
+  const fromDate = `${start} 00:00`;
+  const toDate = `${end} 23:59`;
 
-  // Generar rangos de 7 días
-  const ranges = [];
-  let currentStart = new Date(start);
-  const endDate = new Date(end);
-
-  while (currentStart <= endDate) {
-    let currentEnd = new Date(currentStart);
-    currentEnd.setDate(currentEnd.getDate() + 6); // 7 días
-    if (currentEnd > endDate) currentEnd = new Date(endDate);
-
-    ranges.push({
-      start: currentStart.toISOString().split("T")[0],
-      end: currentEnd.toISOString().split("T")[0]
+  try {
+    const response = await request({
+      method: "get",
+      url: `${BASE_URL}/gcapi/device/dataUsage`,
+      params: {
+        imsi: imsi,
+        fromDate: fromDate,
+        toDate: toDate,
+      },
+      timeout: 10000,
     });
 
-    currentStart.setDate(currentStart.getDate() + 7);
+    const totalBytes = response.data?.totalUsage || 0;
+    const totalMB = totalBytes / (1024 * 1024);
+    return { consumoMB: Number(totalMB.toFixed(3)) };
+  } catch (err) {
+    console.error("Error en fetchUsage (device/dataUsage):", err.message);
+    // Si falla, devolvemos 0 (pero el error queda registrado)
+    return { consumoMB: 0 };
   }
-
-  let totalMB = 0;
-
-  for (const range of ranges) {
-    try {
-      const [uplink, downlink] = await Promise.all([
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simUplink/usage`,
-          data: { imsi, startDate: range.start, endDate: range.end }
-        }).catch(() => null),
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simDownlink/usage`,
-          data: { imsi, startDate: range.start, endDate: range.end }
-        }).catch(() => null)
-      ]);
-
-      const sumTotal = (response) => {
-        if (!response?.data?.object) return 0;
-        return response.data.object.reduce((acc, day) => {
-          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
-          return acc + Number(mb);
-        }, 0);
-      };
-
-      totalMB += sumTotal(uplink) + sumTotal(downlink);
-    } catch (err) {
-      console.error("Error en rango:", err.message);
-    }
-  }
-
-  return { consumoMB: Number(totalMB.toFixed(3)) };
 }
 
 // =========================
