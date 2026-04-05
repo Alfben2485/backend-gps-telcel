@@ -133,21 +133,32 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN (28 → ayer)
+// 🔥 CONVERSIÓN A FECHA LOCAL (CDMX, UTC-6)
+// =========================
+function toLocalDate(date) {
+  const offset = 6; // UTC-6 para CDMX
+  const local = new Date(date.getTime() - offset * 60 * 60 * 1000);
+  return local.toISOString().split("T")[0];
+}
+
+// =========================
+// 🔥 CICLO DE FACTURACIÓN (28 → ayer, en hora local)
 // =========================
 function getDateRange() {
   const now = new Date();
+  // Ajustar a UTC-6 para que el corte de día coincida con CDMX
+  const localNow = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+  
   let start;
-
-  if (now.getDate() >= 28) {
-    start = new Date(now.getFullYear(), now.getMonth(), 28);
+  if (localNow.getUTCDate() >= 28) {
+    start = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), 28));
   } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
+    start = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth() - 1, 28));
   }
-
-  const end = new Date(now);
-  end.setDate(now.getDate() - 1); // ayer
-
+  
+  const end = new Date(localNow);
+  end.setUTCDate(localNow.getUTCDate() - 1); // ayer
+  
   const format = (d) => d.toISOString().split("T")[0];
   return { start: format(start), end: format(end) };
 }
@@ -159,21 +170,9 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔧 FACTORES DE CORRECCIÓN
+// 🔥 CONSUMO COMBINADO (uplink+downlink+sessionHistory+bundleDetails)
 // =========================
-// Factor global (se aplica a todas las SIMs que no tengan factor específico)
-const FACTOR_GLOBAL = 2.262; // Ajusta este valor según la relación real de tus SIMs
-
-// Factores específicos por ICCID (sobrescriben al global)
-const FACTORES_POR_ICCID = {
-  // Ejemplo: "8952020022249322888": 2.262,
-  // Agrega aquí otros ICCID con su factor si la relación es diferente
-};
-
-// =========================
-// 🔥 CONSUMO DÍA POR DÍA + SESSION HISTORY (método fiable)
-// =========================
-async function fetchUsage(request, imsi, iccid) {
+async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const cached = usageCache.get(imsi);
@@ -183,77 +182,62 @@ async function fetchUsage(request, imsi, iccid) {
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período facturación: ${start} → ${end}`);
+  console.log(`📅 Período facturación (hora local CDMX): ${start} → ${end}`);
 
-  // Generar lista de fechas
   const dates = [];
   let current = new Date(start);
   const endDate = new Date(end);
   while (current <= endDate) {
     dates.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
+    current.setUTCDate(current.getUTCDate() + 1);
   }
 
   let totalMB = 0;
   const BATCH_SIZE = 6;
 
-  // UPLINK + DOWNLINK día por día
+  // 1. Uplink + Downlink día por día
   for (let i = 0; i < dates.length; i += BATCH_SIZE) {
     const batch = dates.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
       batch.flatMap(date => [
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simUplink/usage`,
-          data: { imsi, startDate: date, endDate: date }
-        }).catch(() => null),
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simDownlink/usage`,
-          data: { imsi, startDate: date, endDate: date }
-        }).catch(() => null)
+        request({ method: "post", url: `${BASE_URL}/gcapi/simUplink/usage`, data: { imsi, startDate: date, endDate: date } }).catch(() => null),
+        request({ method: "post", url: `${BASE_URL}/gcapi/simDownlink/usage`, data: { imsi, startDate: date, endDate: date } }).catch(() => null)
       ])
     );
     for (const res of results) {
       if (res && res.data && res.data.object) {
         for (const day of res.data.object) {
-          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
-          totalMB += Number(mb);
+          totalMB += Number(day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0);
         }
       }
     }
   }
 
-  // SESSION HISTORY (sesiones activas)
+  // 2. Session History
   try {
-    const sessionRes = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/sessionHistory`,
-      data: { imsi, startDate: start, endDate: end }
-    });
+    const sessionRes = await request({ method: "post", url: `${BASE_URL}/gcapi/device/sessionHistory`, data: { imsi, startDate: start, endDate: end } });
     const sessions = sessionRes.data?.data || [];
     let sessionMB = 0;
-    for (const s of sessions) {
-      sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
-    }
+    for (const s of sessions) sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
     if (sessionMB > 0) {
       console.log(`➕ SessionHistory añade: ${sessionMB.toFixed(3)} MB`);
       totalMB += sessionMB;
     }
-  } catch (err) {
-    console.log(`⚠️ sessionHistory falló: ${err.message}`);
-  }
+  } catch (err) { console.log("⚠️ sessionHistory falló"); }
 
-  // Aplicar factor de corrección
-  const factor = FACTORES_POR_ICCID[iccid] || FACTOR_GLOBAL;
-  const consumoCorregido = totalMB * factor;
-  const rounded = Number(consumoCorregido.toFixed(3));
+  // 3. Bundle Details
+  try {
+    const bundleRes = await request({ method: "post", url: `${BASE_URL}/gcapi/sim/bundleDetails`, data: { imsis: imsi } });
+    const bundleMB = parseFloat(bundleRes.data?.data || 0);
+    if (bundleMB > 0) {
+      console.log(`➕ BundleDetails añade: ${bundleMB.toFixed(3)} MB`);
+      totalMB += bundleMB;
+    }
+  } catch (err) { console.log("⚠️ bundleDetails falló"); }
 
-  console.log(`📊 Consumo base (API): ${totalMB.toFixed(3)} MB`);
-  console.log(`🔧 Factor aplicado: ${factor} → Consumo final: ${rounded} MB`);
-
-  const result = { consumoMB: rounded };
+  const result = { consumoMB: Number(totalMB.toFixed(3)) };
   usageCache.set(imsi, { time: Date.now(), data: result });
+  console.log(`🎯 Consumo final calculado: ${result.consumoMB} MB`);
   return result;
 }
 
@@ -261,83 +245,36 @@ async function fetchUsage(request, imsi, iccid) {
 // 🔥 CORE (sin cambios)
 // =========================
 async function fetchSim(request, value) {
-  const r = await request({
-    method: "post",
-    url: `${BASE_URL}/gcapi/device/list`,
-    data: {
-      start: 0,
-      length: 10,
-      search: { value },
-    },
-  });
-
+  const r = await request({ method: "post", url: `${BASE_URL}/gcapi/device/list`, data: { start: 0, length: 10, search: { value } } });
   const items = r.data?.data || [];
-
-  return items.find(
-    (i) =>
-      String(i.iccid).trim() === String(value).trim() ||
-      String(i.msisdn).trim() === String(value).trim()
-  );
+  return items.find(i => String(i.iccid).trim() === String(value).trim() || String(i.msisdn).trim() === String(value).trim());
 }
 
 async function getSimExtra(request, sim) {
-  const r = await request({
-    method: "post",
-    url: `${BASE_URL}/gcapi/get/sims`,
-    data: { msisdn: sim.msisdn },
-  });
-
-  const device = (r.data?.devices || []).find(
-    (d) => String(d.iccid) === String(sim.iccid)
-  );
-
-  return {
-    imsi: device?.imsi,
-    plan: device?.devicePlans?.planName || "N/A",
-  };
+  const r = await request({ method: "post", url: `${BASE_URL}/gcapi/get/sims`, data: { msisdn: sim.msisdn } });
+  const device = (r.data?.devices || []).find(d => String(d.iccid) === String(sim.iccid));
+  return { imsi: device?.imsi, plan: device?.devicePlans?.planName || "N/A" };
 }
 
 async function getTotalSims(request) {
-  const r = await request({
-    method: "post",
-    url: `${BASE_URL}/gcapi/device/list`,
-    data: { start: 0, length: 1 },
-  });
-
+  const r = await request({ method: "post", url: `${BASE_URL}/gcapi/device/list`, data: { start: 0, length: 1 } });
   return r.data?.recordsFiltered || 0;
 }
 
 // =========================
-// 🔥 ENDPOINTS + RESET
+// 🔥 ENDPOINTS
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
     const timeout = setTimeout(() => res.json({ ok: false, error: "Timeout" }), 25000);
     try {
       const sim = await fetchSim(requestFn, req.params.value);
-      if (!sim) {
-        clearTimeout(timeout);
-        return res.json({ ok: false, error: "SIM no encontrada" });
-      }
-
+      if (!sim) { clearTimeout(timeout); return res.json({ ok: false, error: "SIM no encontrada" }); }
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
-
-      const [consumo, totalSims] = await Promise.all([
-        fetchUsage(requestFn, imsi, sim.iccid),
-        getTotalSims(requestFn),
-      ]);
-
+      const [consumo, totalSims] = await Promise.all([fetchUsage(requestFn, imsi), getTotalSims(requestFn)]);
       clearTimeout(timeout);
-      res.json({
-        ok: true,
-        totalSims,
-        iccid: sim.iccid,
-        msisdn: sim.msisdn,
-        estado: sim.state,
-        plan: extra.plan,
-        consumoMB: consumo.consumoMB,
-      });
+      res.json({ ok: true, totalSims, iccid: sim.iccid, msisdn: sim.msisdn, estado: sim.state, plan: extra.plan, consumoMB: consumo.consumoMB });
     } catch (error) {
       clearTimeout(timeout);
       console.error("Error en endpoint:", error.message);
@@ -351,19 +288,12 @@ function buildReset(path, requestFn) {
     try {
       const sim = await fetchSim(requestFn, req.params.value);
       if (!sim) return res.json({ ok: false, error: "SIM no encontrada" });
-
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
-
-      const r = await requestFn({
-        method: "post",
-        url: `${BASE_URL}/gcapi/sim/reset`,
-        data: { imsi },
-      });
-
+      const r = await requestFn({ method: "post", url: `${BASE_URL}/gcapi/sim/reset`, data: { imsi } });
       res.json({ ok: true, data: r.data });
     } catch (error) {
-      console.error("Error en reset:", error.message);
+      console.error("Error reset:", error.message);
       res.json({ ok: false, error: error.message });
     }
   });
@@ -381,8 +311,5 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER DEFINITIVO - CONSUMO DÍA POR DÍA + FACTOR DE CORRECCIÓN");
-  console.log(`📅 Ciclo facturación: 28 → ayer`);
-  console.log(`🔧 Factor global: ${FACTOR_GLOBAL}`);
-  console.log(`📌 Para factores específicos, edita el objeto FACTORES_POR_ICCID`);
+  console.log("🚀 SERVER CON ZONA HORARIA CDMX (UTC-6) Y MÚLTIPLES FUENTES");
 });
