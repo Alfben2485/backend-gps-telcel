@@ -211,7 +211,7 @@ async function getTotalSims(request) {
 
 
 // =========================
-// 🔥 CONSUMO (NO TOCAR)
+// 🔥 CONSUMO CORREGIDO (FINAL)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -220,48 +220,61 @@ async function fetchUsage(request, imsi) {
 
   let total = 0;
 
-  const days = [];
-  let current = new Date(start);
+  try {
+    // 🔥 MÉTODO PRINCIPAL (IGUAL A PLATAFORMA)
+    const r = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/sessionHistory`,
+      data: {
+        imsi: imsi,
+        startDate: start,
+        endDate: end,
+      },
+    });
 
-  while (current <= new Date(end)) {
-    days.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
+    const sessions = r.data?.data || [];
+
+    sessions.forEach((s) => {
+      total += Number(s.totalBytes || 0) / (1024 * 1024);
+    });
+
+    if (total > 0) {
+      return { consumoMB: Number(total.toFixed(3)) };
+    }
+
+  } catch (e) {
+    console.log("⚠️ sessionHistory falló");
   }
 
-  const chunkSize = 5;
+  // 🔁 FALLBACK
+  try {
+    let fallbackTotal = 0;
 
-  for (let i = 0; i < days.length; i += chunkSize) {
-    const chunk = days.slice(i, i + chunkSize);
+    const rUp = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/simUplink/usage`,
+      data: { imsi, startDate: start, endDate: end },
+    });
 
-    const results = await Promise.all(
-      chunk.map((d) =>
-        Promise.all([
-          request({
-            method: "post",
-            url: `${BASE_URL}/gcapi/simUplink/usage`,
-            data: { imsi, startDate: d, endDate: d },
-          }).catch(() => null),
+    const rDown = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/simDownlink/usage`,
+      data: { imsi, startDate: start, endDate: end },
+    });
 
-          request({
-            method: "post",
-            url: `${BASE_URL}/gcapi/simDownlink/usage`,
-            data: { imsi, startDate: d, endDate: d },
-          }).catch(() => null),
-        ])
-      )
+    (rUp.data?.object || []).forEach(
+      (i) => (fallbackTotal += Number(i["totalBytes(MB)"] || 0))
     );
 
-    for (const [up, down] of results) {
-      (up?.data?.object || []).forEach(
-        (i) => (total += Number(i["totalBytes(MB)"] || 0))
-      );
-      (down?.data?.object || []).forEach(
-        (i) => (total += Number(i["totalBytes(MB)"] || 0))
-      );
-    }
-  }
+    (rDown.data?.object || []).forEach(
+      (i) => (fallbackTotal += Number(i["totalBytes(MB)"] || 0))
+    );
 
-  return { consumoMB: Number(total.toFixed(3)) };
+    return { consumoMB: Number(fallbackTotal.toFixed(3)) };
+
+  } catch {
+    return { consumoMB: 0 };
+  }
 }
 
 
@@ -389,7 +402,6 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
-
 // CUENTA 2
 app.post("/api2/device/reset/:value", async (req, res) => {
   try {
@@ -413,7 +425,6 @@ app.post("/api2/device/reset/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
-
 
 // CUENTA 3
 app.post("/api3/device/reset/:value", async (req, res) => {
@@ -444,5 +455,5 @@ app.post("/api3/device/reset/:value", async (req, res) => {
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER MULTICUENTA OK");
+  console.log("🚀 SERVER MULTICUENTA PERFECTO");
 });
