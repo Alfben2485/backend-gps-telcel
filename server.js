@@ -133,32 +133,24 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CONVERSIÓN A FECHA LOCAL (CDMX, UTC-6)
-// =========================
-function toLocalDate(date) {
-  const offset = 6; // UTC-6 para CDMX
-  const local = new Date(date.getTime() - offset * 60 * 60 * 1000);
-  return local.toISOString().split("T")[0];
-}
-
-// =========================
-// 🔥 CICLO DE FACTURACIÓN (28 → ayer, en hora local)
+// 🔥 CICLO DE FACTURACIÓN CORREGIDO (28 → ayer)
 // =========================
 function getDateRange() {
   const now = new Date();
-  // Ajustar a UTC-6 para que el corte de día coincida con CDMX
-  const localNow = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-  
   let start;
-  if (localNow.getUTCDate() >= 28) {
-    start = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), 28));
+
+  // Día de inicio: 28 del mes actual o del anterior
+  if (now.getDate() >= 28) {
+    start = new Date(now.getFullYear(), now.getMonth(), 28);
   } else {
-    start = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth() - 1, 28));
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
   }
-  
-  const end = new Date(localNow);
-  end.setUTCDate(localNow.getUTCDate() - 1); // ayer
-  
+
+  // Fecha final: ayer
+  const end = new Date(now);
+  end.setDate(now.getDate() - 1);
+
+  // Formato de fecha estricto YYYY-MM-DD
   const format = (d) => d.toISOString().split("T")[0];
   return { start: format(start), end: format(end) };
 }
@@ -170,7 +162,42 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 CONSUMO COMBINADO (uplink+downlink+sessionHistory+bundleDetails)
+// 🔥 FUNCIÓN PARA OBTENER EL entAccount.id DEL DISPOSITIVO
+// =========================
+let cachedAccountId = null;
+let cachedAccountIdImsi = null;
+
+async function getDeviceAccountId(request, imsi) {
+  if (cachedAccountIdImsi === imsi && cachedAccountId && Date.now() - cachedAccountId.time < CACHE_TIME) {
+    return cachedAccountId.id;
+  }
+
+  try {
+    const res = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/get/sims`,
+      data: { imsis: imsi }
+    });
+    
+    const device = res.data?.devices?.find(d => d.imsi === imsi);
+    if (device && device.entAccount && device.entAccount.id) {
+      const accountId = device.entAccount.id;
+      console.log(`📌 Account ID (entAccount.id) obtenido para IMSI ${imsi}: ${accountId}`);
+      cachedAccountId = { id: accountId, time: Date.now() };
+      cachedAccountIdImsi = imsi;
+      return accountId;
+    } else {
+      console.log(`⚠️ No se encontró entAccount.id para IMSI ${imsi}.`);
+      return null;
+    }
+  } catch (err) {
+    console.error(`❌ Error al obtener entAccount.id: ${err.message}`);
+    return null;
+  }
+}
+
+// =========================
+// 🔥 CONSUMO REAL (CORREGIDO)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -182,62 +209,58 @@ async function fetchUsage(request, imsi) {
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período facturación (hora local CDMX): ${start} → ${end}`);
+  console.log(`📅 Período facturación (real): ${start} → ${end}`);
 
-  const dates = [];
-  let current = new Date(start);
-  const endDate = new Date(end);
-  while (current <= endDate) {
-    dates.push(current.toISOString().split("T")[0]);
-    current.setUTCDate(current.getUTCDate() + 1);
+  const accountId = await getDeviceAccountId(request, imsi);
+  if (!accountId) {
+    console.log(`❌ No se pudo obtener accountId.`);
+    return { consumoMB: 0 };
   }
+  console.log(`🏢 Usando Account ID: ${accountId}`);
 
   let totalMB = 0;
-  const BATCH_SIZE = 6;
 
-  // 1. Uplink + Downlink día por día
-  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
-    const batch = dates.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.flatMap(date => [
-        request({ method: "post", url: `${BASE_URL}/gcapi/simUplink/usage`, data: { imsi, startDate: date, endDate: date } }).catch(() => null),
-        request({ method: "post", url: `${BASE_URL}/gcapi/simDownlink/usage`, data: { imsi, startDate: date, endDate: date } }).catch(() => null)
-      ])
-    );
-    for (const res of results) {
-      if (res && res.data && res.data.object) {
-        for (const day of res.data.object) {
-          totalMB += Number(day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0);
-        }
+  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
+  try {
+    const res = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      data: {
+        startDate: start,
+        endDate: end,
+        offset: 0,
+        limit: 100,
+        imsi: imsi,
+        accountId: accountId,
+      },
+      timeout: 15000,
+    });
+
+    if (!usageCache.has(imsi)) {
+      console.log("📦 Respuesta de /sim/Data/Usage:", JSON.stringify(res.data, null, 2));
+    }
+
+    const items = res.data?.object || [];
+    let totalKB = 0;
+    for (const item of items) {
+      if (item.servedImsi === imsi) {
+        totalKB += parseFloat(item.totalBytesInKb || 0);
       }
     }
+    totalMB = totalKB / 1024;
+    if (totalMB > 0) {
+      console.log(`✅ /sim/Data/Usage → ${totalMB.toFixed(3)} MB`);
+    } else {
+      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB.`);
+    }
+  } catch (err) {
+    console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
+    if (err.response) console.error(`   Status: ${err.response.status}, Data:`, err.response.data);
   }
-
-  // 2. Session History
-  try {
-    const sessionRes = await request({ method: "post", url: `${BASE_URL}/gcapi/device/sessionHistory`, data: { imsi, startDate: start, endDate: end } });
-    const sessions = sessionRes.data?.data || [];
-    let sessionMB = 0;
-    for (const s of sessions) sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
-    if (sessionMB > 0) {
-      console.log(`➕ SessionHistory añade: ${sessionMB.toFixed(3)} MB`);
-      totalMB += sessionMB;
-    }
-  } catch (err) { console.log("⚠️ sessionHistory falló"); }
-
-  // 3. Bundle Details
-  try {
-    const bundleRes = await request({ method: "post", url: `${BASE_URL}/gcapi/sim/bundleDetails`, data: { imsis: imsi } });
-    const bundleMB = parseFloat(bundleRes.data?.data || 0);
-    if (bundleMB > 0) {
-      console.log(`➕ BundleDetails añade: ${bundleMB.toFixed(3)} MB`);
-      totalMB += bundleMB;
-    }
-  } catch (err) { console.log("⚠️ bundleDetails falló"); }
 
   const result = { consumoMB: Number(totalMB.toFixed(3)) };
   usageCache.set(imsi, { time: Date.now(), data: result });
-  console.log(`🎯 Consumo final calculado: ${result.consumoMB} MB`);
+  console.log(`🎯 CONSUMO TOTAL FINAL: ${result.consumoMB} MB`);
   return result;
 }
 
@@ -245,36 +268,83 @@ async function fetchUsage(request, imsi) {
 // 🔥 CORE (sin cambios)
 // =========================
 async function fetchSim(request, value) {
-  const r = await request({ method: "post", url: `${BASE_URL}/gcapi/device/list`, data: { start: 0, length: 10, search: { value } } });
+  const r = await request({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: {
+      start: 0,
+      length: 10,
+      search: { value },
+    },
+  });
+
   const items = r.data?.data || [];
-  return items.find(i => String(i.iccid).trim() === String(value).trim() || String(i.msisdn).trim() === String(value).trim());
+
+  return items.find(
+    (i) =>
+      String(i.iccid).trim() === String(value).trim() ||
+      String(i.msisdn).trim() === String(value).trim()
+  );
 }
 
 async function getSimExtra(request, sim) {
-  const r = await request({ method: "post", url: `${BASE_URL}/gcapi/get/sims`, data: { msisdn: sim.msisdn } });
-  const device = (r.data?.devices || []).find(d => String(d.iccid) === String(sim.iccid));
-  return { imsi: device?.imsi, plan: device?.devicePlans?.planName || "N/A" };
+  const r = await request({
+    method: "post",
+    url: `${BASE_URL}/gcapi/get/sims`,
+    data: { msisdn: sim.msisdn },
+  });
+
+  const device = (r.data?.devices || []).find(
+    (d) => String(d.iccid) === String(sim.iccid)
+  );
+
+  return {
+    imsi: device?.imsi,
+    plan: device?.devicePlans?.planName || "N/A",
+  };
 }
 
 async function getTotalSims(request) {
-  const r = await request({ method: "post", url: `${BASE_URL}/gcapi/device/list`, data: { start: 0, length: 1 } });
+  const r = await request({
+    method: "post",
+    url: `${BASE_URL}/gcapi/device/list`,
+    data: { start: 0, length: 1 },
+  });
+
   return r.data?.recordsFiltered || 0;
 }
 
 // =========================
-// 🔥 ENDPOINTS
+// 🔥 ENDPOINTS + RESET
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
     const timeout = setTimeout(() => res.json({ ok: false, error: "Timeout" }), 25000);
     try {
       const sim = await fetchSim(requestFn, req.params.value);
-      if (!sim) { clearTimeout(timeout); return res.json({ ok: false, error: "SIM no encontrada" }); }
+      if (!sim) {
+        clearTimeout(timeout);
+        return res.json({ ok: false, error: "SIM no encontrada" });
+      }
+
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
-      const [consumo, totalSims] = await Promise.all([fetchUsage(requestFn, imsi), getTotalSims(requestFn)]);
+
+      const [consumo, totalSims] = await Promise.all([
+        fetchUsage(requestFn, imsi),
+        getTotalSims(requestFn),
+      ]);
+
       clearTimeout(timeout);
-      res.json({ ok: true, totalSims, iccid: sim.iccid, msisdn: sim.msisdn, estado: sim.state, plan: extra.plan, consumoMB: consumo.consumoMB });
+      res.json({
+        ok: true,
+        totalSims,
+        iccid: sim.iccid,
+        msisdn: sim.msisdn,
+        estado: sim.state,
+        plan: extra.plan,
+        consumoMB: consumo.consumoMB,
+      });
     } catch (error) {
       clearTimeout(timeout);
       console.error("Error en endpoint:", error.message);
@@ -288,12 +358,19 @@ function buildReset(path, requestFn) {
     try {
       const sim = await fetchSim(requestFn, req.params.value);
       if (!sim) return res.json({ ok: false, error: "SIM no encontrada" });
+
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
-      const r = await requestFn({ method: "post", url: `${BASE_URL}/gcapi/sim/reset`, data: { imsi } });
+
+      const r = await requestFn({
+        method: "post",
+        url: `${BASE_URL}/gcapi/sim/reset`,
+        data: { imsi },
+      });
+
       res.json({ ok: true, data: r.data });
     } catch (error) {
-      console.error("Error reset:", error.message);
+      console.error("Error en reset:", error.message);
       res.json({ ok: false, error: error.message });
     }
   });
@@ -311,5 +388,6 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON ZONA HORARIA CDMX (UTC-6) Y MÚLTIPLES FUENTES");
+  console.log("🚀 SERVER CORREGIDO - Usando formato de fecha YYYY-MM-DD y entAccount.id");
+  console.log("📅 Ciclo facturación: 28 del período anterior → ayer");
 });
