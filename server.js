@@ -133,21 +133,22 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN (28 → hoy)
+// 🔥 CICLO DE FACTURACIÓN (28 → ayer)
 // =========================
 function getDateRange() {
   const now = new Date();
   let start;
 
-  // Día de inicio: 28 del mes actual o del anterior según la fecha actual
+  // Día de inicio: 28 del mes actual o del anterior
   if (now.getDate() >= 28) {
     start = new Date(now.getFullYear(), now.getMonth(), 28);
   } else {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
   }
 
-  // Fecha final: hoy (para evitar fechas futuras)
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Fecha final: ayer (para evitar fechas futuras)
+  const end = new Date(now);
+  end.setDate(now.getDate() - 1);
 
   const format = (d) => d.toISOString().split("T")[0];
   return { start: format(start), end: format(end) };
@@ -195,7 +196,7 @@ async function getDeviceAccountId(request, imsi) {
 }
 
 // =========================
-// 🔥 CONSUMO REAL USANDO /gcapi/sim/Data/Usage CON FECHAS HASTA HOY
+// 🔥 CONSUMO REAL (prioriza /sim/Data/Usage, fallback día por día)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -207,18 +208,18 @@ async function fetchUsage(request, imsi) {
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período facturación (real hasta hoy): ${start} → ${end}`);
+  console.log(`📅 Período facturación (real): ${start} → ${end}`);
 
   const accountId = await getDeviceAccountId(request, imsi);
   if (!accountId) {
-    console.log(`❌ No se pudo obtener accountId.`);
-    return { consumoMB: 0 };
+    console.log(`❌ No se pudo obtener accountId, usando método día por día.`);
+    return await fetchUsageDayByDay(request, imsi, start, end);
   }
   console.log(`🏢 Usando Account ID: ${accountId}`);
 
   let totalMB = 0;
 
-  // Método principal: /gcapi/sim/Data/Usage
+  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
   try {
     const res = await request({
       method: "post",
@@ -245,71 +246,70 @@ async function fetchUsage(request, imsi) {
         totalKB += parseFloat(item.totalBytesInKb || 0);
       }
     }
-    const mb = totalKB / 1024;
-    if (mb > 0) {
-      console.log(`✅ /sim/Data/Usage → ${mb.toFixed(3)} MB`);
-      totalMB = mb;
+    totalMB = totalKB / 1024;
+    if (totalMB > 0) {
+      console.log(`✅ /sim/Data/Usage → ${totalMB.toFixed(3)} MB`);
     } else {
-      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB`);
+      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB, usando método día por día.`);
+      return await fetchUsageDayByDay(request, imsi, start, end);
     }
   } catch (err) {
     console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
-    if (err.response) console.error(`   Status: ${err.response.status}, Data:`, err.response.data);
-  }
-
-  // Método alternativo: /consumed/usage
-  if (totalMB === 0) {
-    try {
-      const fromDateTime = `${start} 00:00:00`;
-      const toDateTime = `${end} 23:59:59`;
-      const res = await request({
-        method: "post",
-        url: `${BASE_URL}/gcapi/consumed/usage`,
-        data: {
-          imsis: imsi,
-          startTime: fromDateTime,
-          stopTime: toDateTime,
-          offset: "0",
-          limit: "1",
-        },
-        timeout: 15000,
-      });
-      const mb = parseFloat(res.data?.usage?.data?.dataTotalUsage || 0);
-      if (mb > 0) {
-        console.log(`✅ /consumed/usage → ${mb.toFixed(3)} MB`);
-        totalMB = mb;
-      }
-    } catch (err) {
-      console.error(`❌ Error en /consumed/usage: ${err.message}`);
-    }
-  }
-
-  // Método de reserva: /device/dataUsage
-  if (totalMB === 0) {
-    try {
-      const fromDate = `${start} 00:00`;
-      const toDate = `${end} 23:59`;
-      const res = await request({
-        method: "get",
-        url: `${BASE_URL}/gcapi/device/dataUsage`,
-        params: { imsi, fromDate, toDate },
-        timeout: 10000,
-      });
-      const bytes = res.data?.totalUsage || 0;
-      const mb = bytes / (1024 * 1024);
-      if (mb > 0) {
-        console.log(`✅ /device/dataUsage → ${mb.toFixed(3)} MB`);
-        totalMB = mb;
-      }
-    } catch (err) {
-      console.error(`❌ Error en /device/dataUsage: ${err.message}`);
-    }
+    console.log(`🔄 Cambiando a método día por día...`);
+    return await fetchUsageDayByDay(request, imsi, start, end);
   }
 
   const result = { consumoMB: Number(totalMB.toFixed(3)) };
   usageCache.set(imsi, { time: Date.now(), data: result });
   console.log(`🎯 CONSUMO TOTAL FINAL: ${result.consumoMB} MB`);
   return result;
+}
+
+// =========================
+// 🔥 MÉTODO DÍA POR DÍA (FALLBACK) - usando fechas hasta hoy
+// =========================
+async function fetchUsageDayByDay(request, imsi, start, end) {
+  console.log(`📆 Usando método día por día desde ${start} hasta ${end}`);
+
+  const dates = [];
+  let current = new Date(start);
+  const endDate = new Date(end);
+  while (current <= endDate) {
+    dates.push(current.toISOString().split("T")[0]);
+    current.setDate(current.getDate() + 1);
+  }
+
+  let totalMB = 0;
+  const BATCH_SIZE = 6;
+
+  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
+    const batch = dates.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.flatMap(date => [
+        request({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simUplink/usage`,
+          data: { imsi, startDate: date, endDate: date }
+        }).catch(() => null),
+        request({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simDownlink/usage`,
+          data: { imsi, startDate: date, endDate: date }
+        }).catch(() => null)
+      ])
+    );
+    for (const res of results) {
+      if (res && res.data && res.data.object) {
+        for (const day of res.data.object) {
+          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
+          totalMB += Number(mb);
+        }
+      }
+    }
+  }
+
+  console.log(`📊 Método día por día → ${totalMB.toFixed(3)} MB`);
+  return { consumoMB: Number(totalMB.toFixed(3)) };
 }
 
 // =========================
@@ -436,7 +436,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER DEFINITIVO - FECHAS HASTA HOY");
-  console.log("📅 Ciclo facturación: 28 del mes anterior/período hasta hoy");
-  console.log("🔍 Revisa la consola para ver el consumo real acumulado.");
+  console.log("🚀 SERVER DEFINITIVO - CONSUMO REAL DESDE 28 HASTA AYER");
+  console.log("📅 Rango de fechas: 28 del período → ayer");
+  console.log("🔧 Fallback automático a día por día si falla el endpoint principal");
 });
