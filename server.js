@@ -133,19 +133,21 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN (28 → 27)
+// 🔥 CICLO DE FACTURACIÓN (28 → hoy)
 // =========================
 function getDateRange() {
   const now = new Date();
-  let start, end;
+  let start;
 
+  // Día de inicio: 28 del mes actual o del anterior según la fecha actual
   if (now.getDate() >= 28) {
     start = new Date(now.getFullYear(), now.getMonth(), 28);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
   } else {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
-    end = new Date(now.getFullYear(), now.getMonth(), 27);
   }
+
+  // Fecha final: hoy (para evitar fechas futuras)
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const format = (d) => d.toISOString().split("T")[0];
   return { start: format(start), end: format(end) };
@@ -164,7 +166,6 @@ let cachedAccountId = null;
 let cachedAccountIdImsi = null;
 
 async function getDeviceAccountId(request, imsi) {
-  // Si ya tenemos un accountId para este IMSI y es reciente, lo usamos
   if (cachedAccountIdImsi === imsi && cachedAccountId && Date.now() - cachedAccountId.time < CACHE_TIME) {
     return cachedAccountId.id;
   }
@@ -173,7 +174,7 @@ async function getDeviceAccountId(request, imsi) {
     const res = await request({
       method: "post",
       url: `${BASE_URL}/gcapi/get/sims`,
-      data: { imsis: imsi } // Buscar por IMSI para obtener todos los detalles
+      data: { imsis: imsi }
     });
     
     const device = res.data?.devices?.find(d => d.imsi === imsi);
@@ -184,22 +185,21 @@ async function getDeviceAccountId(request, imsi) {
       cachedAccountIdImsi = imsi;
       return accountId;
     } else {
-      console.log(`⚠️ No se encontró entAccount.id para IMSI ${imsi}. Revisa la respuesta de /get/sims.`);
+      console.log(`⚠️ No se encontró entAccount.id para IMSI ${imsi}.`);
       return null;
     }
   } catch (err) {
-    console.error(`❌ Error al obtener entAccount.id para IMSI ${imsi}: ${err.message}`);
+    console.error(`❌ Error al obtener entAccount.id: ${err.message}`);
     return null;
   }
 }
 
 // =========================
-// 🔥 CONSUMO REAL USANDO /gcapi/sim/Data/Usage CON EL accountId CORRECTO
+// 🔥 CONSUMO REAL USANDO /gcapi/sim/Data/Usage CON FECHAS HASTA HOY
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
-  // Verificar caché
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
     console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
@@ -207,19 +207,18 @@ async function fetchUsage(request, imsi) {
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período facturación: ${start} → ${end}`);
+  console.log(`📅 Período facturación (real hasta hoy): ${start} → ${end}`);
 
-  // 1. Obtener el accountId correcto para este dispositivo
   const accountId = await getDeviceAccountId(request, imsi);
   if (!accountId) {
-    console.log(`❌ No se pudo obtener un accountId válido para el IMSI ${imsi}.`);
+    console.log(`❌ No se pudo obtener accountId.`);
     return { consumoMB: 0 };
   }
-  console.log(`🏢 Usando Account ID (entAccount): ${accountId}`);
+  console.log(`🏢 Usando Account ID: ${accountId}`);
 
   let totalMB = 0;
 
-  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
+  // Método principal: /gcapi/sim/Data/Usage
   try {
     const res = await request({
       method: "post",
@@ -235,7 +234,6 @@ async function fetchUsage(request, imsi) {
       timeout: 15000,
     });
 
-    // Mostrar la respuesta para depuración (solo la primera vez)
     if (!usageCache.has(imsi)) {
       console.log("📦 Respuesta de /sim/Data/Usage:", JSON.stringify(res.data, null, 2));
     }
@@ -247,21 +245,19 @@ async function fetchUsage(request, imsi) {
         totalKB += parseFloat(item.totalBytesInKb || 0);
       }
     }
-    const mbFromDataUsage = totalKB / 1024;
-    if (mbFromDataUsage > 0) {
-      console.log(`✅ /sim/Data/Usage → ${mbFromDataUsage.toFixed(3)} MB`);
-      totalMB = mbFromDataUsage;
+    const mb = totalKB / 1024;
+    if (mb > 0) {
+      console.log(`✅ /sim/Data/Usage → ${mb.toFixed(3)} MB`);
+      totalMB = mb;
     } else {
-      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB, intentando método alternativo...`);
+      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB`);
     }
   } catch (err) {
     console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
-    if (err.response) {
-      console.error(`   Status: ${err.response.status}, Data:`, JSON.stringify(err.response.data, null, 2));
-    }
+    if (err.response) console.error(`   Status: ${err.response.status}, Data:`, err.response.data);
   }
 
-  // MÉTODO ALTERNATIVO: /gcapi/consumed/usage
+  // Método alternativo: /consumed/usage
   if (totalMB === 0) {
     try {
       const fromDateTime = `${start} 00:00:00`;
@@ -278,21 +274,17 @@ async function fetchUsage(request, imsi) {
         },
         timeout: 15000,
       });
-      const dataUsage = res.data?.usage?.data?.dataTotalUsage || 0;
-      const mbFromConsumed = parseFloat(dataUsage);
-      if (mbFromConsumed > 0) {
-        console.log(`✅ /consumed/usage → ${mbFromConsumed.toFixed(3)} MB`);
-        totalMB = mbFromConsumed;
+      const mb = parseFloat(res.data?.usage?.data?.dataTotalUsage || 0);
+      if (mb > 0) {
+        console.log(`✅ /consumed/usage → ${mb.toFixed(3)} MB`);
+        totalMB = mb;
       }
     } catch (err) {
       console.error(`❌ Error en /consumed/usage: ${err.message}`);
-      if (err.response) {
-        console.error(`   Status: ${err.response.status}, Data:`, JSON.stringify(err.response.data, null, 2));
-      }
     }
   }
 
-  // MÉTODO DE RESERVA: /gcapi/device/dataUsage
+  // Método de reserva: /device/dataUsage
   if (totalMB === 0) {
     try {
       const fromDate = `${start} 00:00`;
@@ -304,16 +296,13 @@ async function fetchUsage(request, imsi) {
         timeout: 10000,
       });
       const bytes = res.data?.totalUsage || 0;
-      const mbFromBytes = bytes / (1024 * 1024);
-      if (mbFromBytes > 0) {
-        console.log(`✅ /device/dataUsage → ${mbFromBytes.toFixed(3)} MB`);
-        totalMB = mbFromBytes;
+      const mb = bytes / (1024 * 1024);
+      if (mb > 0) {
+        console.log(`✅ /device/dataUsage → ${mb.toFixed(3)} MB`);
+        totalMB = mb;
       }
     } catch (err) {
       console.error(`❌ Error en /device/dataUsage: ${err.message}`);
-      if (err.response) {
-        console.error(`   Status: ${err.response.status}, Data:`, JSON.stringify(err.response.data, null, 2));
-      }
     }
   }
 
@@ -447,7 +436,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER DEFINITIVO - USANDO entAccount.id PARA CONSUMO");
-  console.log("📅 Ciclo facturación: 28 → 27");
-  console.log("🔍 Revisa la consola para ver qué accountId se utiliza y la respuesta de la API.");
+  console.log("🚀 SERVER DEFINITIVO - FECHAS HASTA HOY");
+  console.log("📅 Ciclo facturación: 28 del mes anterior/período hasta hoy");
+  console.log("🔍 Revisa la consola para ver el consumo real acumulado.");
 });
