@@ -133,7 +133,7 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN (28 → 27)
+// 🔥 CICLO DE FACTURACIÓN REAL (28 → 27)
 // =========================
 function getDateRange() {
   const now = new Date();
@@ -158,7 +158,7 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 CONSUMO INTELIGENTE CON FALLBACKS
+// 🔥 CONSUMO DEFINITIVO USANDO /consumed/usage (el que sí da el total real)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -166,131 +166,63 @@ async function fetchUsage(request, imsi) {
   // Verificar caché
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
-    console.log(`⚡ Caché para IMSI ${imsi}`);
+    console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
     return cached.data;
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período consultado: ${start} → ${end}`);
+  console.log(`📅 Período facturación: ${start} → ${end}`);
 
+  // Convertir fechas a objetos Date para generar chunks de 3 días
+  let startDate = new Date(start);
+  let endDate = new Date(end);
   let totalMB = 0;
 
-  // 1️⃣ INTENTO PRINCIPAL: endpoint /device/dataUsage
-  const fromDate = `${start} 00:00`;
-  const toDate = `${end} 23:59`;
-  try {
-    console.log(`🔍 Intentando /device/dataUsage para IMSI: ${imsi}`);
-    const response = await request({
-      method: "get",
-      url: `${BASE_URL}/gcapi/device/dataUsage`,
-      params: {
-        imsi: imsi,
-        fromDate: fromDate,
-        toDate: toDate,
-      },
-      timeout: 10000,
-    });
-    const totalBytes = response.data?.totalUsage || 0;
-    const totalMBFromEndpoint = totalBytes / (1024 * 1024);
-    if (totalMBFromEndpoint > 0) {
-      console.log(`✅ /device/dataUsage devolvió: ${totalMBFromEndpoint.toFixed(3)} MB`);
-      totalMB += totalMBFromEndpoint;
-    } else {
-      console.log(`⚠️ /device/dataUsage devolvió 0 MB. Se procede con métodos alternativos.`);
-    }
-  } catch (err) {
-    console.error(`❌ Error en /device/dataUsage: ${err.message}. Se procede con métodos alternativos.`);
-  }
+  // Generar chunks de máximo 3 días
+  let chunkStart = new Date(startDate);
+  while (chunkStart <= endDate) {
+    let chunkEnd = new Date(chunkStart);
+    chunkEnd.setDate(chunkEnd.getDate() + 2); // 3 días (inclusive)
+    if (chunkEnd > endDate) chunkEnd = new Date(endDate);
 
-  // Si el primer intento falló o devolvió 0, usamos los métodos alternativos
-  if (totalMB === 0) {
-    console.log(`🔄 Usando métodos alternativos (día por día + sessionHistory)...`);
+    const fromDateTime = `${chunkStart.toISOString().split("T")[0]} 00:00:00`;
+    const toDateTime = `${chunkEnd.toISOString().split("T")[0]} 23:59:59`;
 
-    // 2️⃣ MÉTODO DÍA POR DÍA (uplink + downlink)
-    const dates = [];
-    let current = new Date(start);
-    const endDate = new Date(end);
-    while (current <= endDate) {
-      dates.push(current.toISOString().split("T")[0]);
-      current.setDate(current.getDate() + 1);
-    }
+    console.log(`🔄 Consultando chunk: ${fromDateTime} → ${toDateTime}`);
 
-    const BATCH_SIZE = 6;
-    for (let i = 0; i < dates.length; i += BATCH_SIZE) {
-      const batch = dates.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(
-        batch.map((date) =>
-          Promise.all([
-            request({
-              method: "post",
-              url: `${BASE_URL}/gcapi/simUplink/usage`,
-              data: { imsi, startDate: date, endDate: date },
-            }).catch(() => null),
-            request({
-              method: "post",
-              url: `${BASE_URL}/gcapi/simDownlink/usage`,
-              data: { imsi, startDate: date, endDate: date },
-            }).catch(() => null),
-          ])
-        )
-      );
-
-      for (const [up, down] of results) {
-        const upList = up?.data?.object || [];
-        const downList = down?.data?.object || [];
-        upList.forEach((item) => {
-          totalMB += Number(item["totalBytes(MB)"] || 0);
-        });
-        downList.forEach((item) => {
-          totalMB += Number(item["totalBytes(MB)"] || 0);
-        });
-      }
-    }
-
-    // 3️⃣ SESIONES ACTIVAS (sessionHistory)
     try {
-      const sessionRes = await request({
+      const response = await request({
         method: "post",
-        url: `${BASE_URL}/gcapi/device/sessionHistory`,
+        url: `${BASE_URL}/gcapi/consumed/usage`,
         data: {
-          imsi: imsi,
-          startDate: start,
-          endDate: end,
+          imsis: imsi,
+          startTime: fromDateTime,
+          stopTime: toDateTime,
+          offset: "0",
+          limit: "1",
         },
+        timeout: 10000, // 10 segundos por chunk
       });
-      const sessions = sessionRes.data?.data || [];
-      let sessionMB = 0;
-      sessions.forEach((s) => {
-        sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
-      });
-      if (sessionMB > 0) {
-        console.log(`➕ sessionHistory agregó: ${sessionMB.toFixed(3)} MB`);
-        totalMB += sessionMB;
+
+      // La respuesta tiene: usage.data.dataTotalUsage (en MB)
+      const chunkMB = parseFloat(response.data?.usage?.data?.dataTotalUsage || 0);
+      if (!isNaN(chunkMB) && chunkMB > 0) {
+        console.log(`   ✅ +${chunkMB.toFixed(3)} MB`);
+        totalMB += chunkMB;
+      } else {
+        console.log(`   ⚠️ 0 MB en este chunk`);
       }
     } catch (err) {
-      console.log(`⚠️ sessionHistory falló (no afecta el total principal): ${err.message}`);
+      console.error(`   ❌ Error en chunk: ${err.message}`);
     }
 
-    // 4️⃣ DATOS DEL BUNDLE ACTUAL (bundleDetails)
-    try {
-      const bundleRes = await request({
-        method: "post",
-        url: `${BASE_URL}/gcapi/sim/bundleDetails`,
-        data: { imsis: imsi },
-      });
-      const dataUsed = bundleRes.data?.data || 0;
-      if (dataUsed > 0) {
-        console.log(`➕ bundleDetails agregó: ${dataUsed} MB`);
-        totalMB += parseFloat(dataUsed);
-      }
-    } catch (err) {
-      console.log(`⚠️ bundleDetails falló (no afecta el total principal): ${err.message}`);
-    }
+    // Avanzar al siguiente chunk (día siguiente al final del chunk actual)
+    chunkStart.setDate(chunkEnd.getDate() + 1);
   }
 
   const result = { consumoMB: Number(totalMB.toFixed(3)) };
   usageCache.set(imsi, { time: Date.now(), data: result });
-  console.log(`🎯 Consumo TOTAL calculado: ${result.consumoMB} MB`);
+  console.log(`🎯 CONSUMO TOTAL REAL: ${result.consumoMB} MB`);
   return result;
 }
 
@@ -412,7 +344,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CONSUMO INTELIGENTE Y FALLBACKS");
-  console.log(`📅 Ciclo de facturación configurado: 28 → 27`);
-  console.log("🔍 Revisa la consola para ver qué método recupera el consumo real.");
+  console.log("🚀 SERVER CON CONSUMO REAL VÍA /consumed/usage");
+  console.log("📅 Ciclo de facturación: 28 → 27 (estándar Claro)");
+  console.log("🔍 Revisa la consola para ver los MB obtenidos por chunk");
 });
