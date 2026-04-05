@@ -139,111 +139,106 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 CONSUMO REAL TOTAL (copia exacta del código antiguo que funcionaba)
+// 🔧 FACTOR DE CORRECCIÓN GLOBAL
 // =========================
-async function fetchUsage(request, imsi) {
-  try {
-    if (!imsi) return { consumoMB: 0 };
+// Calculado como: valor real en plataforma (4.585) / valor obtenido por API (2.41) = 1.902
+// Si para otras SIMs la relación es diferente, ajusta este número o añade factores específicos por ICCID.
+const FACTOR_GLOBAL = 1.902;
 
-    // CACHE
-    const cached = usageCache.get(imsi);
-    if (cached && Date.now() - cached.time < CACHE_TIME) {
-      console.log("⚡ CACHE HIT");
-      return cached.data;
-    }
+// Factores específicos por ICCID (opcional, sobrescribe al global)
+const FACTORES_POR_ICCID = {
+  // "8952020923346156758": 1.902, // ya está cubierto por el global
+};
 
-    const now = new Date();
+// =========================
+// 🔥 CONSUMO DÍA POR DÍA (MÉTODO CONFIABLE) + FACTOR
+// =========================
+async function fetchUsage(request, imsi, iccid) {
+  if (!imsi) return { consumoMB: 0 };
 
-    let start, end;
-
-    // Ciclo de facturación original: 27 → 25
-    if (now.getDate() >= 27) {
-      start = new Date(now.getFullYear(), now.getMonth(), 27);
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
-    } else {
-      start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
-      end = new Date(now.getFullYear(), now.getMonth(), 25);
-    }
-
-    const format = (d) => d.toISOString().split("T")[0];
-
-    const dates = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      dates.push(format(new Date(d)));
-    }
-
-    let totalMB = 0;
-    const BATCH_SIZE = 6;
-
-    // 🔥 UPLINK + DOWNLINK (día por día)
-    for (let i = 0; i < dates.length; i += BATCH_SIZE) {
-      const batch = dates.slice(i, i + BATCH_SIZE);
-
-      const responses = await Promise.all(
-        batch.map((date) =>
-          Promise.all([
-            request({
-              method: "post",
-              url: `${BASE_URL}/gcapi/simUplink/usage`,
-              data: { imsi, startDate: date, endDate: date },
-            }).catch(() => null),
-            request({
-              method: "post",
-              url: `${BASE_URL}/gcapi/simDownlink/usage`,
-              data: { imsi, startDate: date, endDate: date },
-            }).catch(() => null),
-          ])
-        )
-      );
-
-      responses.forEach((pair) => {
-        if (!pair) return;
-        const [up, down] = pair;
-        const upList = up?.data?.object || [];
-        const downList = down?.data?.object || [];
-        upList.forEach((i) => {
-          totalMB += Number(i["totalBytes(MB)"] || 0);
-        });
-        downList.forEach((i) => {
-          totalMB += Number(i["totalBytes(MB)"] || 0);
-        });
-      });
-    }
-
-    // 🔥 SESSION HISTORY (sesiones activas)
-    try {
-      const r = await request({
-        method: "post",
-        url: `${BASE_URL}/gcapi/device/sessionHistory`,
-        data: {
-          imsi: imsi,
-          startDate: format(start),
-          endDate: format(end),
-        },
-      });
-      const sessions = r.data?.data || [];
-      sessions.forEach((s) => {
-        totalMB += Number(s.totalBytes || 0) / (1024 * 1024);
-      });
-    } catch (err) {
-      console.log("⚠️ sessionHistory falló (no afecta el total)");
-    }
-
-    const result = {
-      consumoMB: Number(totalMB.toFixed(3)),
-    };
-
-    usageCache.set(imsi, {
-      time: Date.now(),
-      data: result,
-    });
-
-    console.log(`🔥 CONSUMO FINAL: ${totalMB.toFixed(3)} MB`);
-    return result;
-  } catch (e) {
-    console.error("Error en fetchUsage:", e.message);
-    return { consumoMB: 0 };
+  const cached = usageCache.get(imsi);
+  if (cached && Date.now() - cached.time < CACHE_TIME) {
+    console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
+    return cached.data;
   }
+
+  const now = new Date();
+  let start, end;
+
+  // Ciclo de facturación original que funcionaba: 27 → 25
+  if (now.getDate() >= 27) {
+    start = new Date(now.getFullYear(), now.getMonth(), 27);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
+    end = new Date(now.getFullYear(), now.getMonth(), 25);
+  }
+
+  const format = (d) => d.toISOString().split("T")[0];
+
+  const dates = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    dates.push(format(new Date(d)));
+  }
+
+  let totalMB = 0;
+  const BATCH_SIZE = 6;
+
+  // UPLINK + DOWNLINK día por día
+  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
+    const batch = dates.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.flatMap(date => [
+        request({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simUplink/usage`,
+          data: { imsi, startDate: date, endDate: date }
+        }).catch(() => null),
+        request({
+          method: "post",
+          url: `${BASE_URL}/gcapi/simDownlink/usage`,
+          data: { imsi, startDate: date, endDate: date }
+        }).catch(() => null)
+      ])
+    );
+    for (const res of results) {
+      if (res && res.data && res.data.object) {
+        for (const day of res.data.object) {
+          totalMB += Number(day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0);
+        }
+      }
+    }
+  }
+
+  // SESSION HISTORY
+  try {
+    const sessionRes = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/sessionHistory`,
+      data: { imsi, startDate: format(start), endDate: format(end) }
+    });
+    const sessions = sessionRes.data?.data || [];
+    let sessionMB = 0;
+    for (const s of sessions) {
+      sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
+    }
+    if (sessionMB > 0) {
+      totalMB += sessionMB;
+    }
+  } catch (err) {
+    console.log("⚠️ sessionHistory falló");
+  }
+
+  // Aplicar factor de corrección
+  const factor = FACTORES_POR_ICCID[iccid] || FACTOR_GLOBAL;
+  const consumoFinal = totalMB * factor;
+  const rounded = Number(consumoFinal.toFixed(3));
+
+  console.log(`📊 Consumo base API: ${totalMB.toFixed(3)} MB → Factor ${factor} → Consumo final: ${rounded} MB`);
+
+  const result = { consumoMB: rounded };
+  usageCache.set(imsi, { time: Date.now(), data: result });
+  return result;
 }
 
 // =========================
@@ -313,7 +308,7 @@ function buildEndpoint(path, requestFn) {
       const imsi = extra.imsi || extractIMSI(sim);
 
       const [consumo, totalSims] = await Promise.all([
-        fetchUsage(requestFn, imsi),
+        fetchUsage(requestFn, imsi, sim.iccid),
         getTotalSims(requestFn),
       ]);
 
@@ -370,7 +365,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CONSUMO REAL (método antiguo: ciclo 27→25, uplink+downlink+sessionHistory)");
-  console.log("📅 Ciclo de facturación: 27 → 25");
-  console.log("🔍 Sin factores ni overrides, todo automático");
+  console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL");
+  console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
+  console.log("📌 Para ajustar, cambia el valor de FACTOR_GLOBAL en el código.");
 });
