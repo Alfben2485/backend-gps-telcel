@@ -130,75 +130,71 @@ function extractIMSI(item) {
   );
 }
 
-// =========================
-// 🔥 CICLO DE FACTURACIÓN: 28 → 27 (estándar Claro)
-// =========================
+// 🔥 CICLO ORIGINAL (28 → 26) - SIN CAMBIOS
 function getDateRange() {
   const now = new Date();
+
   let start, end;
 
-  if (now.getDate() >= 28) {
+  if (now.getDate() >= 27) {
     start = new Date(now.getFullYear(), now.getMonth(), 28);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 26);
   } else {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
-    end = new Date(now.getFullYear(), now.getMonth(), 27);
+    end = new Date(now.getFullYear(), now.getMonth(), 26);
   }
 
   const format = (d) => d.toISOString().split("T")[0];
+
   return { start: format(start), end: format(end) };
 }
 
 // =========================
-// 🔥 CONSUMO CON ENDPOINT CONFIABLE /consumed/usage (con chunking de 3 días)
+// 🔥 CONSUMO CORREGIDO (con timeout y endpoint confiable)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const { start, end } = getDateRange();
 
-  // Convertir fechas a objetos Date para iterar
-  let startDate = new Date(start);
-  let endDate = new Date(end);
-  
-  let totalMB = 0;
-  let currentStart = new Date(startDate);
+  // Formato de fecha requerido por /device/dataUsage: "YYYY-MM-DD HH:MM"
+  const fromDate = `${start} 00:00`;
+  const toDate = `${end} 23:59`;
 
-  // El endpoint /consumed/usage solo permite máximo 3 días por llamada
-  while (currentStart <= endDate) {
-    let currentEnd = new Date(currentStart);
-    currentEnd.setDate(currentEnd.getDate() + 2); // rango de 3 días
-    if (currentEnd > endDate) currentEnd = new Date(endDate);
+  // Timeout de 30 segundos para toda la operación
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Timeout")), 30000)
+  );
 
-    // Formato requerido: "YYYY-MM-DD HH:MM:SS"
-    const fromDateTime = `${currentStart.toISOString().split("T")[0]} 00:00:00`;
-    const toDateTime = `${currentEnd.toISOString().split("T")[0]} 23:59:59`;
-
+  const fetchPromise = (async () => {
     try {
       const response = await request({
-        method: "post",
-        url: `${BASE_URL}/gcapi/consumed/usage`,
-        data: {
-          imsis: imsi,
-          startTime: fromDateTime,
-          stopTime: toDateTime,
-          offset: "0",
-          limit: "1"
-        }
+        method: "get",
+        url: `${BASE_URL}/gcapi/device/dataUsage`,
+        params: {
+          imsi: imsi,
+          fromDate: fromDate,
+          toDate: toDate,
+        },
       });
 
-      // La respuesta tiene un objeto "usage" con "data" que contiene "dataTotalUsage" en MB
-      const dataUsage = response.data?.usage?.data?.dataTotalUsage || 0;
-      totalMB += parseFloat(dataUsage);
+      // El campo totalUsage viene en bytes
+      const totalBytes = response.data?.totalUsage || 0;
+      const totalMB = totalBytes / (1024 * 1024);
+      return { consumoMB: Number(totalMB.toFixed(3)) };
     } catch (err) {
-      console.error("Error en chunk de consumo:", err.message);
+      console.error("Error en device/dataUsage:", err.message);
+      return { consumoMB: 0 };
     }
+  })();
 
-    // Avanzar al siguiente día (inicio del siguiente chunk)
-    currentStart.setDate(currentEnd.getDate() + 1);
+  try {
+    const resultado = await Promise.race([fetchPromise, timeoutPromise]);
+    return resultado;
+  } catch (error) {
+    console.error("fetchUsage timeout o error:", error.message);
+    return { consumoMB: 0 };
   }
-
-  return { consumoMB: Number(totalMB.toFixed(3)) };
 }
 
 // =========================
