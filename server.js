@@ -14,6 +14,7 @@ const agent = new https.Agent({
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
+
 // =========================
 // 🔥 CUENTA ORIGINAL (NO TOCAR)
 // =========================
@@ -22,6 +23,7 @@ const PASSWORD = "Soporte122@";
 
 let TOKEN = null;
 let TOKEN_TIME = 0;
+
 
 // =========================
 // 🔥 CUENTAS EXTRA
@@ -43,6 +45,7 @@ const ACCOUNTS_EXTRA = {
 
 const TOKEN_DURATION = 50 * 60 * 1000;
 
+
 // =========================
 // 🔐 TOKEN ORIGINAL
 // =========================
@@ -63,6 +66,7 @@ async function ensureToken() {
     await getToken();
   }
 }
+
 
 // =========================
 // 🔐 TOKEN EXTRA
@@ -86,6 +90,7 @@ async function ensureTokenExtra(key) {
   }
 }
 
+
 // =========================
 // 🔥 REQUEST ORIGINAL
 // =========================
@@ -103,6 +108,7 @@ async function claroRequest(config) {
   });
 }
 
+
 // =========================
 // 🔥 REQUEST EXTRA
 // =========================
@@ -119,6 +125,7 @@ async function claroRequestExtra(key, config) {
     },
   });
 }
+
 
 // =========================
 // 🔹 FUNCIONES GENERALES
@@ -150,6 +157,7 @@ function getDateRange() {
 
   return { start: format(start), end: format(end) };
 }
+
 
 // =========================
 // 🔥 FUNCIONES CORE
@@ -201,8 +209,10 @@ async function getTotalSims(request) {
   return r.data?.recordsFiltered || 0;
 }
 
+
 // =========================
-// 🔥 CONSUMO (FINAL)
+// 🔥 CONSUMO (NO TOCAR)
+// =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
@@ -210,62 +220,50 @@ async function fetchUsage(request, imsi) {
 
   let total = 0;
 
-  try {
-    // 🔥 MÉTODO PRINCIPAL (IGUAL A PLATAFORMA)
-    const r = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/sessionHistory`,
-      data: {
-        imsi: imsi,
-        startDate: start,
-        endDate: end,
-      },
-    });
+  const days = [];
+  let current = new Date(start);
 
-    const sessions = r.data?.data || [];
+  while (current <= new Date(end)) {
+    days.push(current.toISOString().split("T")[0]);
+    current.setDate(current.getDate() + 1);
+  }
 
-    sessions.forEach((s) => {
-      total += Number(s.totalBytes || 0) / (1024 * 1024);
-    });
+  const chunkSize = 5;
 
-    if (total > 0) {
-      return { consumoMB: Number(total.toFixed(3)) };
+  for (let i = 0; i < days.length; i += chunkSize) {
+    const chunk = days.slice(i, i + chunkSize);
+
+    const results = await Promise.all(
+      chunk.map((d) =>
+        Promise.all([
+          request({
+            method: "post",
+            url: `${BASE_URL}/gcapi/simUplink/usage`,
+            data: { imsi, startDate: d, endDate: d },
+          }).catch(() => null),
+
+          request({
+            method: "post",
+            url: `${BASE_URL}/gcapi/simDownlink/usage`,
+            data: { imsi, startDate: d, endDate: d },
+          }).catch(() => null),
+        ])
+      )
+    );
+
+    for (const [up, down] of results) {
+      (up?.data?.object || []).forEach(
+        (i) => (total += Number(i["totalBytes(MB)"] || 0))
+      );
+      (down?.data?.object || []).forEach(
+        (i) => (total += Number(i["totalBytes(MB)"] || 0))
+      );
     }
-
-  } catch (e) {
-    console.log("⚠️ sessionHistory falló");
   }
 
-  // 🔁 FALLBACK
-  try {
-    let fallbackTotal = 0;
-
-    const rUp = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/simUplink/usage`,
-      data: { imsi, startDate: start, endDate: end },
-    });
-
-    const rDown = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/simDownlink/usage`,
-      data: { imsi, startDate: start, endDate: end },
-    });
-
-    (rUp.data?.object || []).forEach(
-      (i) => (fallbackTotal += Number(i["totalBytes(MB)"] || 0))
-    );
-
-    (rDown.data?.object || []).forEach(
-      (i) => (fallbackTotal += Number(i["totalBytes(MB)"] || 0))
-    );
-
-    return { consumoMB: Number(fallbackTotal.toFixed(3)) };
-
-  } catch {
-    return { consumoMB: 0 };
-  }
+  return { consumoMB: Number(total.toFixed(3)) };
 }
+
 
 // =========================
 // 🔥 ENDPOINTS
@@ -300,6 +298,7 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
+
 // CUENTA 2
 app.get("/api2/device/full/:value", async (req, res) => {
   try {
@@ -330,6 +329,7 @@ app.get("/api2/device/full/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
+
 
 // CUENTA 3
 app.get("/api3/device/full/:value", async (req, res) => {
@@ -362,6 +362,7 @@ app.get("/api3/device/full/:value", async (req, res) => {
   }
 });
 
+
 // =========================
 // 🔁 RESET
 // =========================
@@ -388,6 +389,7 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
+
 // CUENTA 2
 app.post("/api2/device/reset/:value", async (req, res) => {
   try {
@@ -411,6 +413,7 @@ app.post("/api2/device/reset/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
+
 
 // CUENTA 3
 app.post("/api3/device/reset/:value", async (req, res) => {
@@ -436,9 +439,10 @@ app.post("/api3/device/reset/:value", async (req, res) => {
   }
 });
 
+
 // =========================
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER MULTICUENTA PERFECTO");
+  console.log("🚀 SERVER MULTICUENTA OK");
 });
