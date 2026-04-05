@@ -14,7 +14,6 @@ const agent = new https.Agent({
 
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
-
 // =========================
 // 🔥 CUENTA ORIGINAL (NO TOCAR)
 // =========================
@@ -23,7 +22,6 @@ const PASSWORD = "Soporte122@";
 
 let TOKEN = null;
 let TOKEN_TIME = 0;
-
 
 // =========================
 // 🔥 CUENTAS EXTRA
@@ -45,7 +43,6 @@ const ACCOUNTS_EXTRA = {
 
 const TOKEN_DURATION = 50 * 60 * 1000;
 
-
 // =========================
 // 🔐 TOKEN ORIGINAL
 // =========================
@@ -66,7 +63,6 @@ async function ensureToken() {
     await getToken();
   }
 }
-
 
 // =========================
 // 🔐 TOKEN EXTRA
@@ -90,7 +86,6 @@ async function ensureTokenExtra(key) {
   }
 }
 
-
 // =========================
 // 🔥 REQUEST ORIGINAL
 // =========================
@@ -108,7 +103,6 @@ async function claroRequest(config) {
   });
 }
 
-
 // =========================
 // 🔥 REQUEST EXTRA
 // =========================
@@ -125,7 +119,6 @@ async function claroRequestExtra(key, config) {
     },
   });
 }
-
 
 // =========================
 // 🔹 FUNCIONES GENERALES
@@ -157,7 +150,6 @@ function getDateRange() {
 
   return { start: format(start), end: format(end) };
 }
-
 
 // =========================
 // 🔥 FUNCIONES CORE
@@ -209,10 +201,8 @@ async function getTotalSims(request) {
   return r.data?.recordsFiltered || 0;
 }
 
-
 // =========================
-// 🔥 CONSUMO CORREGIDO (FINAL)
-// =========================
+// 🔥 CONSUMO (FINAL)
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
@@ -277,7 +267,6 @@ async function fetchUsage(request, imsi) {
   }
 }
 
-
 // =========================
 // 🔥 ENDPOINTS
 // =========================
@@ -311,7 +300,6 @@ app.get("/api/device/full/:value", async (req, res) => {
   }
 });
 
-
 // CUENTA 2
 app.get("/api2/device/full/:value", async (req, res) => {
   try {
@@ -343,7 +331,6 @@ app.get("/api2/device/full/:value", async (req, res) => {
   }
 });
 
-
 // CUENTA 3
 app.get("/api3/device/full/:value", async (req, res) => {
   try {
@@ -374,7 +361,6 @@ app.get("/api3/device/full/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
-
 
 // =========================
 // 🔁 RESET
@@ -449,7 +435,6 @@ app.post("/api3/device/reset/:value", async (req, res) => {
     res.json({ ok: false });
   }
 });
-
 
 // =========================
 // 🚀 START
