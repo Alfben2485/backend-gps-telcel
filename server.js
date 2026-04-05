@@ -87,7 +87,7 @@ async function ensureTokenExtra(key) {
 }
 
 // =========================
-// 🔥 REQUEST (con validateStatus para no lanzar error)
+// 🔥 REQUEST (con validateStatus)
 // =========================
 async function claroRequest(config) {
   await ensureToken();
@@ -122,7 +122,7 @@ async function claroRequestExtra(key, config) {
 }
 
 // =========================
-// 🧠 CACHE PARA CONSUMO (2 minutos)
+// 🧠 CACHE (2 minutos)
 // =========================
 const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
@@ -141,18 +141,24 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN (27 → 25) – EL QUE FUNCIONABA
+// 🔥 CICLO DE FACTURACIÓN (AJUSTABLE)
+// Prueba con 28 y 27 primero (debe dar 13.628 MB)
+// Si no, cambia a 27 y 25 (como tu código antiguo) o 28 y 26.
 // =========================
 function getDateRange() {
   const now = new Date();
   let start, end;
 
-  if (now.getDate() >= 27) {
-    start = new Date(now.getFullYear(), now.getMonth(), 27);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+  // 👇 CAMBIA ESTOS DOS NÚMEROS SEGÚN LO QUE COINCIDA CON LA PLATAFORMA
+  const CORTE_INICIO = 28;   // día de inicio del ciclo
+  const CORTE_FIN = 27;      // último día del ciclo
+
+  if (now.getDate() >= CORTE_INICIO) {
+    start = new Date(now.getFullYear(), now.getMonth(), CORTE_INICIO);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, CORTE_FIN);
   } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
-    end = new Date(now.getFullYear(), now.getMonth(), 25);
+    start = new Date(now.getFullYear(), now.getMonth() - 1, CORTE_INICIO);
+    end = new Date(now.getFullYear(), now.getMonth(), CORTE_FIN);
   }
 
   const format = (d) => d.toISOString().split("T")[0];
@@ -160,12 +166,12 @@ function getDateRange() {
 }
 
 // =========================
-// 🔥 CONSUMO (copia exacta de la lógica que sí funcionaba)
+// 🔥 CONSUMO OPTIMIZADO (chunks de 7 días, rápido)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
-  // Verificar caché
+  // Caché
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
     return cached.data;
@@ -173,81 +179,74 @@ async function fetchUsage(request, imsi) {
 
   const { start, end } = getDateRange();
 
-  // Generar todas las fechas del período
-  const dates = [];
-  let current = new Date(start);
+  // Generar rangos de 7 días
+  const ranges = [];
+  let currentStart = new Date(start);
   const endDate = new Date(end);
-  while (current <= endDate) {
-    dates.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
+
+  while (currentStart <= endDate) {
+    let currentEnd = new Date(currentStart);
+    currentEnd.setDate(currentEnd.getDate() + 6); // 7 días
+    if (currentEnd > endDate) currentEnd = new Date(endDate);
+    ranges.push({
+      start: currentStart.toISOString().split("T")[0],
+      end: currentEnd.toISOString().split("T")[0]
+    });
+    currentStart.setDate(currentStart.getDate() + 7);
   }
 
   let totalMB = 0;
-  const BATCH_SIZE = 6; // Procesar 6 días a la vez (como en el código antiguo)
 
-  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
-    const batch = dates.slice(i, i + BATCH_SIZE);
+  // Procesar rangos en paralelo (máximo 3 a la vez)
+  const chunkSize = 3;
+  for (let i = 0; i < ranges.length; i += chunkSize) {
+    const chunk = ranges.slice(i, i + chunkSize);
+    const promises = chunk.flatMap(range => [
+      request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/simUplink/usage`,
+        data: { imsi, startDate: range.start, endDate: range.end }
+      }).catch(() => null),
+      request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/simDownlink/usage`,
+        data: { imsi, startDate: range.start, endDate: range.end }
+      }).catch(() => null)
+    ]);
 
-    const results = await Promise.all(
-      batch.map((date) =>
-        Promise.all([
-          request({
-            method: "post",
-            url: `${BASE_URL}/gcapi/simUplink/usage`,
-            data: { imsi, startDate: date, endDate: date },
-          }).catch(() => null),
-          request({
-            method: "post",
-            url: `${BASE_URL}/gcapi/simDownlink/usage`,
-            data: { imsi, startDate: date, endDate: date },
-          }).catch(() => null),
-        ])
-      )
-    );
-
-    for (const [up, down] of results) {
-      const upList = up?.data?.object || [];
-      const downList = down?.data?.object || [];
-
-      upList.forEach((item) => {
-        totalMB += Number(item["totalBytes(MB)"] || 0);
-      });
-      downList.forEach((item) => {
-        totalMB += Number(item["totalBytes(MB)"] || 0);
-      });
+    const results = await Promise.all(promises);
+    for (const res of results) {
+      if (res && res.data && res.data.object) {
+        for (const day of res.data.object) {
+          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
+          totalMB += Number(mb);
+        }
+      }
     }
   }
 
-  // 🔥 Agregar consumo de sesiones activas (sessionHistory)
+  // Agregar sessionHistory (una sola llamada)
   try {
     const sessionRes = await request({
       method: "post",
       url: `${BASE_URL}/gcapi/device/sessionHistory`,
-      data: {
-        imsi: imsi,
-        startDate: start,
-        endDate: end,
-      },
+      data: { imsi, startDate: start, endDate: end }
     });
     const sessions = sessionRes.data?.data || [];
-    sessions.forEach((s) => {
+    for (const s of sessions) {
       totalMB += Number(s.totalBytes || 0) / (1024 * 1024);
-    });
+    }
   } catch (err) {
-    // No crítico, solo registrar
-    console.log("⚠️ sessionHistory falló (no afecta el total principal)");
+    // No crítico
   }
 
   const result = { consumoMB: Number(totalMB.toFixed(3)) };
-
-  // Guardar en caché
   usageCache.set(imsi, { time: Date.now(), data: result });
-
   return result;
 }
 
 // =========================
-// 🔥 CORE (sin cambios, pero usando las funciones de request)
+// 🔥 CORE (sin cambios)
 // =========================
 async function fetchSim(request, value) {
   const r = await request({
@@ -297,7 +296,7 @@ async function getTotalSims(request) {
 }
 
 // =========================
-// 🔥 ENDPOINTS + RESET (sin cambios)
+// 🔥 ENDPOINTS + RESET
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
@@ -364,5 +363,5 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CONSUMO CORREGIDO Y RÁPIDO");
+  console.log("🚀 SERVER OPTIMIZADO - RÁPIDO Y PRECISO");
 });
