@@ -158,25 +158,48 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 FACTOR DE CORRECCIÓN GLOBAL (calculado como real / obtenido)
+// 🔥 FUNCIÓN PARA OBTENER EL entAccount.id DEL DISPOSITIVO
 // =========================
-// Valor real en plataforma: 14.071 MB
-// Valor obtenido por día por día: 6.22 MB
-// Factor = 14.071 / 6.22 ≈ 2.262
-const FACTOR_CORRECCION = 2.262;
+let cachedAccountId = null;
+let cachedAccountIdImsi = null;
 
-// Opcional: factores específicos por ICCID (si alguna SIM tiene diferente relación)
-const FACTORES_POR_ICCID = {
-  // "8952020022249322888": 2.262, // ya cubierto por el global
-};
+async function getDeviceAccountId(request, imsi) {
+  // Si ya tenemos un accountId para este IMSI y es reciente, lo usamos
+  if (cachedAccountIdImsi === imsi && cachedAccountId && Date.now() - cachedAccountId.time < CACHE_TIME) {
+    return cachedAccountId.id;
+  }
+
+  try {
+    const res = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/get/sims`,
+      data: { imsis: imsi } // Buscar por IMSI para obtener todos los detalles
+    });
+    
+    const device = res.data?.devices?.find(d => d.imsi === imsi);
+    if (device && device.entAccount && device.entAccount.id) {
+      const accountId = device.entAccount.id;
+      console.log(`📌 Account ID (entAccount.id) obtenido para IMSI ${imsi}: ${accountId}`);
+      cachedAccountId = { id: accountId, time: Date.now() };
+      cachedAccountIdImsi = imsi;
+      return accountId;
+    } else {
+      console.log(`⚠️ No se encontró entAccount.id para IMSI ${imsi}. Revisa la respuesta de /get/sims.`);
+      return null;
+    }
+  } catch (err) {
+    console.error(`❌ Error al obtener entAccount.id para IMSI ${imsi}: ${err.message}`);
+    return null;
+  }
+}
 
 // =========================
-// 🔥 CONSUMO DÍA POR DÍA (MÉTODO CONFIABLE) + APLICAR FACTOR
+// 🔥 CONSUMO REAL USANDO /gcapi/sim/Data/Usage CON EL accountId CORRECTO
 // =========================
-async function fetchUsage(request, imsi, iccid) {
+async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
-  // Caché
+  // Verificar caché
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
     console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
@@ -186,54 +209,117 @@ async function fetchUsage(request, imsi, iccid) {
   const { start, end } = getDateRange();
   console.log(`📅 Período facturación: ${start} → ${end}`);
 
-  // Generar lista de fechas
-  const dates = [];
-  let current = new Date(start);
-  const endDate = new Date(end);
-  while (current <= endDate) {
-    dates.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
+  // 1. Obtener el accountId correcto para este dispositivo
+  const accountId = await getDeviceAccountId(request, imsi);
+  if (!accountId) {
+    console.log(`❌ No se pudo obtener un accountId válido para el IMSI ${imsi}.`);
+    return { consumoMB: 0 };
   }
+  console.log(`🏢 Usando Account ID (entAccount): ${accountId}`);
 
   let totalMB = 0;
-  const BATCH_SIZE = 6;
 
-  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
-    const batch = dates.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.flatMap(date => [
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simUplink/usage`,
-          data: { imsi, startDate: date, endDate: date }
-        }).catch(() => null),
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simDownlink/usage`,
-          data: { imsi, startDate: date, endDate: date }
-        }).catch(() => null)
-      ])
-    );
-    for (const res of results) {
-      if (res && res.data && res.data.object) {
-        for (const day of res.data.object) {
-          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
-          totalMB += Number(mb);
-        }
+  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
+  try {
+    const res = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      data: {
+        startDate: start,
+        endDate: end,
+        offset: 0,
+        limit: 100,
+        imsi: imsi,
+        accountId: accountId,
+      },
+      timeout: 15000,
+    });
+
+    // Mostrar la respuesta para depuración (solo la primera vez)
+    if (!usageCache.has(imsi)) {
+      console.log("📦 Respuesta de /sim/Data/Usage:", JSON.stringify(res.data, null, 2));
+    }
+
+    const items = res.data?.object || [];
+    let totalKB = 0;
+    for (const item of items) {
+      if (item.servedImsi === imsi) {
+        totalKB += parseFloat(item.totalBytesInKb || 0);
+      }
+    }
+    const mbFromDataUsage = totalKB / 1024;
+    if (mbFromDataUsage > 0) {
+      console.log(`✅ /sim/Data/Usage → ${mbFromDataUsage.toFixed(3)} MB`);
+      totalMB = mbFromDataUsage;
+    } else {
+      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB, intentando método alternativo...`);
+    }
+  } catch (err) {
+    console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
+    if (err.response) {
+      console.error(`   Status: ${err.response.status}, Data:`, JSON.stringify(err.response.data, null, 2));
+    }
+  }
+
+  // MÉTODO ALTERNATIVO: /gcapi/consumed/usage
+  if (totalMB === 0) {
+    try {
+      const fromDateTime = `${start} 00:00:00`;
+      const toDateTime = `${end} 23:59:59`;
+      const res = await request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/consumed/usage`,
+        data: {
+          imsis: imsi,
+          startTime: fromDateTime,
+          stopTime: toDateTime,
+          offset: "0",
+          limit: "1",
+        },
+        timeout: 15000,
+      });
+      const dataUsage = res.data?.usage?.data?.dataTotalUsage || 0;
+      const mbFromConsumed = parseFloat(dataUsage);
+      if (mbFromConsumed > 0) {
+        console.log(`✅ /consumed/usage → ${mbFromConsumed.toFixed(3)} MB`);
+        totalMB = mbFromConsumed;
+      }
+    } catch (err) {
+      console.error(`❌ Error en /consumed/usage: ${err.message}`);
+      if (err.response) {
+        console.error(`   Status: ${err.response.status}, Data:`, JSON.stringify(err.response.data, null, 2));
       }
     }
   }
 
-  // Aplicar factor de corrección
-  const factor = FACTORES_POR_ICCID[iccid] || FACTOR_CORRECCION;
-  const consumoCorregido = totalMB * factor;
-  const rounded = Number(consumoCorregido.toFixed(3));
+  // MÉTODO DE RESERVA: /gcapi/device/dataUsage
+  if (totalMB === 0) {
+    try {
+      const fromDate = `${start} 00:00`;
+      const toDate = `${end} 23:59`;
+      const res = await request({
+        method: "get",
+        url: `${BASE_URL}/gcapi/device/dataUsage`,
+        params: { imsi, fromDate, toDate },
+        timeout: 10000,
+      });
+      const bytes = res.data?.totalUsage || 0;
+      const mbFromBytes = bytes / (1024 * 1024);
+      if (mbFromBytes > 0) {
+        console.log(`✅ /device/dataUsage → ${mbFromBytes.toFixed(3)} MB`);
+        totalMB = mbFromBytes;
+      }
+    } catch (err) {
+      console.error(`❌ Error en /device/dataUsage: ${err.message}`);
+      if (err.response) {
+        console.error(`   Status: ${err.response.status}, Data:`, JSON.stringify(err.response.data, null, 2));
+      }
+    }
+  }
 
-  console.log(`📊 Consumo base (API día por día): ${totalMB.toFixed(3)} MB`);
-  console.log(`🔧 Factor aplicado: ${factor} → Consumo corregido: ${rounded} MB`);
-
-  const result = { consumoMB: rounded };
+  const result = { consumoMB: Number(totalMB.toFixed(3)) };
   usageCache.set(imsi, { time: Date.now(), data: result });
+  console.log(`🎯 CONSUMO TOTAL FINAL: ${result.consumoMB} MB`);
   return result;
 }
 
@@ -304,7 +390,7 @@ function buildEndpoint(path, requestFn) {
       const imsi = extra.imsi || extractIMSI(sim);
 
       const [consumo, totalSims] = await Promise.all([
-        fetchUsage(requestFn, imsi, sim.iccid),
+        fetchUsage(requestFn, imsi),
         getTotalSims(requestFn),
       ]);
 
@@ -361,7 +447,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN (día por día + factor)");
-  console.log(`📅 Ciclo facturación: 28 → 27`);
-  console.log(`🔧 Factor de corrección global: ${FACTOR_CORRECCION}`);
+  console.log("🚀 SERVER DEFINITIVO - USANDO entAccount.id PARA CONSUMO");
+  console.log("📅 Ciclo facturación: 28 → 27");
+  console.log("🔍 Revisa la consola para ver qué accountId se utiliza y la respuesta de la API.");
 });
