@@ -133,18 +133,31 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN REAL (28 → 27)
+// 🔥 CICLO DE FACTURACIÓN (AJUSTABLE)
 // =========================
+// Prueba con ciclo natural: inicio = 1, fin = último día del mes
+// Si no da 14 MB, cambia a (28,27) o (27,25) según veas en la plataforma.
+const CORTE_INICIO = 1;
+const CORTE_FIN = 0; // 0 significa "último día del mes"
+
 function getDateRange() {
   const now = new Date();
   let start, end;
 
-  if (now.getDate() >= 28) {
-    start = new Date(now.getFullYear(), now.getMonth(), 28);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
+  if (now.getDate() >= CORTE_INICIO) {
+    start = new Date(now.getFullYear(), now.getMonth(), CORTE_INICIO);
+    if (CORTE_FIN === 0) {
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    } else {
+      end = new Date(now.getFullYear(), now.getMonth() + 1, CORTE_FIN);
+    }
   } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
-    end = new Date(now.getFullYear(), now.getMonth(), 27);
+    start = new Date(now.getFullYear(), now.getMonth() - 1, CORTE_INICIO);
+    if (CORTE_FIN === 0) {
+      end = new Date(now.getFullYear(), now.getMonth(), 0);
+    } else {
+      end = new Date(now.getFullYear(), now.getMonth(), CORTE_FIN);
+    }
   }
 
   const format = (d) => d.toISOString().split("T")[0];
@@ -158,7 +171,7 @@ const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 CONSUMO DEFINITIVO USANDO /consumed/usage (el que sí da el total real)
+// 🔥 CONSUMO RÁPIDO Y PRECISO (chunks de 7 días + sessionHistory + bundleDetails)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
@@ -173,51 +186,87 @@ async function fetchUsage(request, imsi) {
   const { start, end } = getDateRange();
   console.log(`📅 Período facturación: ${start} → ${end}`);
 
-  // Convertir fechas a objetos Date para generar chunks de 3 días
-  let startDate = new Date(start);
-  let endDate = new Date(end);
   let totalMB = 0;
 
-  // Generar chunks de máximo 3 días
-  let chunkStart = new Date(startDate);
-  while (chunkStart <= endDate) {
-    let chunkEnd = new Date(chunkStart);
-    chunkEnd.setDate(chunkEnd.getDate() + 2); // 3 días (inclusive)
-    if (chunkEnd > endDate) chunkEnd = new Date(endDate);
+  // 1️⃣ UPLINK + DOWNLINK por rangos de 7 días (rápido)
+  const ranges = [];
+  let currentStart = new Date(start);
+  const endDate = new Date(end);
+  while (currentStart <= endDate) {
+    let currentEnd = new Date(currentStart);
+    currentEnd.setDate(currentEnd.getDate() + 6); // 7 días
+    if (currentEnd > endDate) currentEnd = new Date(endDate);
+    ranges.push({
+      start: currentStart.toISOString().split("T")[0],
+      end: currentEnd.toISOString().split("T")[0],
+    });
+    currentStart.setDate(currentStart.getDate() + 7);
+  }
 
-    const fromDateTime = `${chunkStart.toISOString().split("T")[0]} 00:00:00`;
-    const toDateTime = `${chunkEnd.toISOString().split("T")[0]} 23:59:59`;
-
-    console.log(`🔄 Consultando chunk: ${fromDateTime} → ${toDateTime}`);
-
-    try {
-      const response = await request({
+  // Procesar rangos en paralelo (máximo 3 a la vez para no saturar)
+  const chunkSize = 3;
+  for (let i = 0; i < ranges.length; i += chunkSize) {
+    const chunk = ranges.slice(i, i + chunkSize);
+    const promises = chunk.flatMap((range) => [
+      request({
         method: "post",
-        url: `${BASE_URL}/gcapi/consumed/usage`,
-        data: {
-          imsis: imsi,
-          startTime: fromDateTime,
-          stopTime: toDateTime,
-          offset: "0",
-          limit: "1",
-        },
-        timeout: 10000, // 10 segundos por chunk
-      });
+        url: `${BASE_URL}/gcapi/simUplink/usage`,
+        data: { imsi, startDate: range.start, endDate: range.end },
+      }).catch(() => null),
+      request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/simDownlink/usage`,
+        data: { imsi, startDate: range.start, endDate: range.end },
+      }).catch(() => null),
+    ]);
 
-      // La respuesta tiene: usage.data.dataTotalUsage (en MB)
-      const chunkMB = parseFloat(response.data?.usage?.data?.dataTotalUsage || 0);
-      if (!isNaN(chunkMB) && chunkMB > 0) {
-        console.log(`   ✅ +${chunkMB.toFixed(3)} MB`);
-        totalMB += chunkMB;
-      } else {
-        console.log(`   ⚠️ 0 MB en este chunk`);
+    const results = await Promise.all(promises);
+    for (const res of results) {
+      if (res && res.data && res.data.object) {
+        for (const day of res.data.object) {
+          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
+          totalMB += Number(mb);
+        }
       }
-    } catch (err) {
-      console.error(`   ❌ Error en chunk: ${err.message}`);
     }
+  }
+  console.log(`📊 Uplink+Downlink suman: ${totalMB.toFixed(3)} MB`);
 
-    // Avanzar al siguiente chunk (día siguiente al final del chunk actual)
-    chunkStart.setDate(chunkEnd.getDate() + 1);
+  // 2️⃣ SESIONES ACTIVAS (sessionHistory)
+  try {
+    const sessionRes = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/device/sessionHistory`,
+      data: { imsi, startDate: start, endDate: end },
+    });
+    const sessions = sessionRes.data?.data || [];
+    let sessionMB = 0;
+    for (const s of sessions) {
+      sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
+    }
+    if (sessionMB > 0) {
+      console.log(`➕ SessionHistory añade: ${sessionMB.toFixed(3)} MB`);
+      totalMB += sessionMB;
+    }
+  } catch (err) {
+    console.log(`⚠️ sessionHistory falló: ${err.message}`);
+  }
+
+  // 3️⃣ BUNDLE DETAILS (consumo del plan actual)
+  try {
+    const bundleRes = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/bundleDetails`,
+      data: { imsis: imsi },
+    });
+    // bundleDetails devuelve, por ejemplo: { "data":"6.22", "voice":"0", "sms":"0", "imsi":"..." }
+    const bundleDataMB = parseFloat(bundleRes.data?.data || 0);
+    if (bundleDataMB > 0) {
+      console.log(`➕ BundleDetails añade: ${bundleDataMB.toFixed(3)} MB`);
+      totalMB += bundleDataMB;
+    }
+  } catch (err) {
+    console.log(`⚠️ bundleDetails falló: ${err.message}`);
   }
 
   const result = { consumoMB: Number(totalMB.toFixed(3)) };
@@ -281,9 +330,17 @@ async function getTotalSims(request) {
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
+    // Timeout global de 20 segundos para la respuesta
+    const timeout = setTimeout(() => {
+      res.json({ ok: false, error: "Timeout del servidor" });
+    }, 20000);
+
     try {
       const sim = await fetchSim(requestFn, req.params.value);
-      if (!sim) return res.json({ ok: false });
+      if (!sim) {
+        clearTimeout(timeout);
+        return res.json({ ok: false });
+      }
 
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
@@ -293,6 +350,7 @@ function buildEndpoint(path, requestFn) {
         getTotalSims(requestFn),
       ]);
 
+      clearTimeout(timeout);
       res.json({
         ok: true,
         totalSims,
@@ -303,6 +361,7 @@ function buildEndpoint(path, requestFn) {
         consumoMB: consumo.consumoMB,
       });
     } catch (error) {
+      clearTimeout(timeout);
       console.error("Error en endpoint:", error.message);
       res.json({ ok: false });
     }
@@ -344,7 +403,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CONSUMO REAL VÍA /consumed/usage");
-  console.log("📅 Ciclo de facturación: 28 → 27 (estándar Claro)");
-  console.log("🔍 Revisa la consola para ver los MB obtenidos por chunk");
+  console.log("🚀 SERVER CON CONSUMO REAL (día por día optimizado + bundleDetails)");
+  console.log(`📅 Ciclo facturación: ${CORTE_INICIO} → ${CORTE_FIN === 0 ? "fin de mes" : CORTE_FIN}`);
+  console.log("🔍 Revisa la consola para ver el detalle de MB sumados.");
 });
