@@ -133,31 +133,18 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN (AJUSTABLE)
+// 🔥 CICLO DE FACTURACIÓN (28 → 27)
 // =========================
-// Cambia estos valores según el ciclo real de Claro.
-// Prueba con (28,27) o (1, último día del mes) o (27,26)
-const CORTE_INICIO = 28;
-const CORTE_FIN = 27; // Si es 0 significa "último día del mes"
-
 function getDateRange() {
   const now = new Date();
   let start, end;
 
-  if (now.getDate() >= CORTE_INICIO) {
-    start = new Date(now.getFullYear(), now.getMonth(), CORTE_INICIO);
-    if (CORTE_FIN === 0) {
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    } else {
-      end = new Date(now.getFullYear(), now.getMonth() + 1, CORTE_FIN);
-    }
+  if (now.getDate() >= 28) {
+    start = new Date(now.getFullYear(), now.getMonth(), 28);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
   } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, CORTE_INICIO);
-    if (CORTE_FIN === 0) {
-      end = new Date(now.getFullYear(), now.getMonth(), 0);
-    } else {
-      end = new Date(now.getFullYear(), now.getMonth(), CORTE_FIN);
-    }
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
+    end = new Date(now.getFullYear(), now.getMonth(), 27);
   }
 
   const format = (d) => d.toISOString().split("T")[0];
@@ -165,121 +152,90 @@ function getDateRange() {
 }
 
 // =========================
-// 🧠 CACHE PARA CONSUMO (2 minutos)
+// 🧠 CACHE (2 minutos)
 // =========================
 const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 FACTOR DE CORRECCIÓN (si la API devuelve menos que la plataforma)
+// 🔥 OBTENER ACCOUNT ID DESDE TOKEN (opcional)
 // =========================
-// Ajusta este número según la relación: (consumo real) / (consumo devuelto)
-// Por ejemplo, si la plataforma muestra 14 MB y el backend devuelve 6.22, el factor es 14/6.22 ≈ 2.25
-const FACTOR_CORRECCION = 1.0; // Cambia solo si es necesario
+let cachedAccountId = null;
+async function getAccountId(request) {
+  if (cachedAccountId) return cachedAccountId;
+  try {
+    // Intentar obtener el accountId del usuario actual
+    const res = await request({
+      method: "get",
+      url: `${BASE_URL}/gcapi/users?start=0&size=1`,
+    });
+    const users = res.data?.users;
+    if (users && users.length > 0 && users[0].account && users[0].account.id) {
+      cachedAccountId = users[0].account.id;
+      console.log(`📌 Account ID obtenido: ${cachedAccountId}`);
+      return cachedAccountId;
+    }
+  } catch (e) {
+    console.log("No se pudo obtener accountId automáticamente");
+  }
+  // Fallback: el accountId del ejemplo (12) o el del token anterior (789)
+  return 12; // Puedes cambiar a 789 si es necesario
+}
 
 // =========================
-// 🔥 CONSUMO COMBINADO (uplink+downlink + sessionHistory + bundleDetails)
+// 🔥 CONSUMO DEFINITIVO usando /gcapi/sim/Data/Usage (consolidado)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
-  // Verificar caché
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
-    console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
+    console.log(`⚡ Caché → ${cached.data.consumoMB} MB`);
     return cached.data;
   }
 
   const { start, end } = getDateRange();
-  console.log(`📅 Período facturación: ${start} → ${end}`);
+  console.log(`📅 Período: ${start} → ${end}`);
 
-  // 1. Obtener todos los días del período
-  const dates = [];
-  let current = new Date(start);
-  const endDate = new Date(end);
-  while (current <= endDate) {
-    dates.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
-  }
+  const accountId = await getAccountId(request);
+  console.log(`🔢 Usando accountId: ${accountId}`);
 
-  let totalMB = 0;
+  try {
+    const response = await request({
+      method: "post",
+      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
+      data: {
+        startDate: start,
+        endDate: end,
+        offset: 0,
+        limit: 100,
+        accountId: accountId,
+        imsi: imsi
+      },
+      timeout: 15000,
+    });
 
-  // 2. UPLINK + DOWNLINK día por día (método que dio 6.22 MB)
-  const BATCH_SIZE = 5;
-  for (let i = 0; i < dates.length; i += BATCH_SIZE) {
-    const batch = dates.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.flatMap(date => [
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simUplink/usage`,
-          data: { imsi, startDate: date, endDate: date }
-        }).catch(() => null),
-        request({
-          method: "post",
-          url: `${BASE_URL}/gcapi/simDownlink/usage`,
-          data: { imsi, startDate: date, endDate: date }
-        }).catch(() => null)
-      ])
-    );
-    for (const res of results) {
-      if (res?.data?.object) {
-        for (const day of res.data.object) {
-          const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
-          totalMB += Number(mb);
-        }
+    console.log("📦 Respuesta completa de sim/Data/Usage:", JSON.stringify(response.data, null, 2));
+
+    const items = response.data?.object || [];
+    let totalKB = 0;
+    for (const item of items) {
+      if (item.servedImsi === imsi) {
+        totalKB += parseFloat(item.totalBytesInKb || 0);
       }
     }
-  }
-  console.log(`📊 Uplink+Downlink: ${totalMB.toFixed(3)} MB`);
+    const totalMB = totalKB / 1024;
+    const rounded = Number(totalMB.toFixed(3));
+    console.log(`✅ Consumo real desde sim/Data/Usage: ${rounded} MB`);
 
-  // 3. Session History (sesiones activas)
-  try {
-    const sessionRes = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/device/sessionHistory`,
-      data: { imsi, startDate: start, endDate: end }
-    });
-    const sessions = sessionRes.data?.data || [];
-    let sessionMB = 0;
-    for (const s of sessions) {
-      sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
-    }
-    if (sessionMB > 0) {
-      console.log(`➕ SessionHistory añade: ${sessionMB.toFixed(3)} MB`);
-      totalMB += sessionMB;
-    }
+    const result = { consumoMB: rounded };
+    usageCache.set(imsi, { time: Date.now(), data: result });
+    return result;
   } catch (err) {
-    console.log(`⚠️ sessionHistory falló: ${err.message}`);
+    console.error("❌ Error en sim/Data/Usage:", err.message);
+    if (err.response) console.error("Detalle:", err.response.data);
+    return { consumoMB: 0 };
   }
-
-  // 4. Bundle Details (consumo actual del plan)
-  try {
-    const bundleRes = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/sim/bundleDetails`,
-      data: { imsis: imsi }
-    });
-    const bundleMB = parseFloat(bundleRes.data?.data || 0);
-    if (bundleMB > 0) {
-      console.log(`➕ BundleDetails añade: ${bundleMB.toFixed(3)} MB`);
-      totalMB += bundleMB;
-    }
-  } catch (err) {
-    console.log(`⚠️ bundleDetails falló: ${err.message}`);
-  }
-
-  // Aplicar factor de corrección si es necesario
-  let consumoFinal = totalMB * FACTOR_CORRECCION;
-  consumoFinal = Number(consumoFinal.toFixed(3));
-  console.log(`🎯 Consumo TOTAL (antes de factor): ${totalMB.toFixed(3)} MB`);
-  if (FACTOR_CORRECCION !== 1.0) {
-    console.log(`🔧 Factor de corrección aplicado: ${FACTOR_CORRECCION} → ${consumoFinal} MB`);
-  }
-
-  const result = { consumoMB: consumoFinal };
-  usageCache.set(imsi, { time: Date.now(), data: result });
-  return result;
 }
 
 // =========================
@@ -333,12 +289,12 @@ async function getTotalSims(request) {
 }
 
 // =========================
-// 🔥 ENDPOINTS + RESET (sin cambios)
+// 🔥 ENDPOINTS + RESET
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
     const timeout = setTimeout(() => {
-      res.json({ ok: false, error: "Timeout del servidor" });
+      res.json({ ok: false, error: "Timeout" });
     }, 25000);
 
     try {
@@ -409,7 +365,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON MÚLTIPLES FUENTES DE CONSUMO + FACTOR DE CORRECCIÓN");
-  console.log(`📅 Ciclo facturación: ${CORTE_INICIO} → ${CORTE_FIN === 0 ? "fin de mes" : CORTE_FIN}`);
-  console.log(`🔧 Factor de corrección actual: ${FACTOR_CORRECCION} (cámbialo si el consumo no coincide)`);
+  console.log("🚀 SERVER CON sim/Data/Usage (consumo consolidado real)");
+  console.log("📅 Ciclo facturación: 28 → 27");
+  console.log("🔍 Revisa la consola para ver la respuesta de la API");
 });
