@@ -160,7 +160,7 @@ function getDateRange() {
 
 
 // =========================
-// 🔥 FUNCIONES CORE (GENERICAS)
+// 🔥 FUNCIONES CORE
 // =========================
 async function fetchSim(request, value) {
   const r = await request({
@@ -209,6 +209,10 @@ async function getTotalSims(request) {
   return r.data?.recordsFiltered || 0;
 }
 
+
+// =========================
+// 🔥 CONSUMO (NO TOCAR)
+// =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
@@ -262,8 +266,10 @@ async function fetchUsage(request, imsi) {
 
 
 // =========================
-// 🔥 ENDPOINT ORIGINAL (NO TOCAR)
+// 🔥 ENDPOINTS
 // =========================
+
+// CUENTA 1
 app.get("/api/device/full/:value", async (req, res) => {
   try {
     const sim = await fetchSim(claroRequest, req.params.value);
@@ -293,28 +299,20 @@ app.get("/api/device/full/:value", async (req, res) => {
 });
 
 
-// =========================
-// 🔥 ENDPOINT CUENTA 2
-// =========================
+// CUENTA 2
 app.get("/api2/device/full/:value", async (req, res) => {
   try {
-    const sim = await fetchSim(
-      (cfg) => claroRequestExtra("cuenta2", cfg),
-      req.params.value
-    );
+    const req2 = (cfg) => claroRequestExtra("cuenta2", cfg);
 
+    const sim = await fetchSim(req2, req.params.value);
     if (!sim) return res.json({ ok: false });
 
-    const extra = await getSimExtra(
-      (cfg) => claroRequestExtra("cuenta2", cfg),
-      sim
-    );
-
+    const extra = await getSimExtra(req2, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsage((cfg) => claroRequestExtra("cuenta2", cfg), imsi),
-      getTotalSims((cfg) => claroRequestExtra("cuenta2", cfg)),
+      fetchUsage(req2, imsi),
+      getTotalSims(req2),
     ]);
 
     res.json({
@@ -333,28 +331,20 @@ app.get("/api2/device/full/:value", async (req, res) => {
 });
 
 
-// =========================
-// 🔥 ENDPOINT CUENTA 3
-// =========================
+// CUENTA 3
 app.get("/api3/device/full/:value", async (req, res) => {
   try {
-    const sim = await fetchSim(
-      (cfg) => claroRequestExtra("cuenta3", cfg),
-      req.params.value
-    );
+    const req3 = (cfg) => claroRequestExtra("cuenta3", cfg);
 
+    const sim = await fetchSim(req3, req.params.value);
     if (!sim) return res.json({ ok: false });
 
-    const extra = await getSimExtra(
-      (cfg) => claroRequestExtra("cuenta3", cfg),
-      sim
-    );
-
+    const extra = await getSimExtra(req3, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
     const [consumo, totalSims] = await Promise.all([
-      fetchUsage((cfg) => claroRequestExtra("cuenta3", cfg), imsi),
-      getTotalSims((cfg) => claroRequestExtra("cuenta3", cfg)),
+      fetchUsage(req3, imsi),
+      getTotalSims(req3),
     ]);
 
     res.json({
@@ -374,8 +364,10 @@ app.get("/api3/device/full/:value", async (req, res) => {
 
 
 // =========================
-// 🔁 RESET (ORIGINAL)
+// 🔁 RESET
 // =========================
+
+// CUENTA 1
 app.post("/api/device/reset/:value", async (req, res) => {
   try {
     const sim = await fetchSim(claroRequest, req.params.value);
@@ -397,18 +389,19 @@ app.post("/api/device/reset/:value", async (req, res) => {
   }
 });
 
-// =========================
-// 🔁 RESET (api2)
-// =========================
+
+// CUENTA 2
 app.post("/api2/device/reset/:value", async (req, res) => {
   try {
-    const sim = await fetchSim(claroRequest, req.params.value);
+    const req2 = (cfg) => claroRequestExtra("cuenta2", cfg);
+
+    const sim = await fetchSim(req2, req.params.value);
     if (!sim) return res.json({ ok: false });
 
-    const extra = await getSimExtra(claroRequest, sim);
+    const extra = await getSimExtra(req2, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
-    const r = await claroRequest({
+    const r = await req2({
       method: "post",
       url: `${BASE_URL}/gcapi/sim/reset`,
       data: { imsi },
@@ -421,18 +414,19 @@ app.post("/api2/device/reset/:value", async (req, res) => {
   }
 });
 
-// =========================
-// 🔁 RESET (api3)
-// =========================
+
+// CUENTA 3
 app.post("/api3/device/reset/:value", async (req, res) => {
   try {
-    const sim = await fetchSim(claroRequest, req.params.value);
+    const req3 = (cfg) => claroRequestExtra("cuenta3", cfg);
+
+    const sim = await fetchSim(req3, req.params.value);
     if (!sim) return res.json({ ok: false });
 
-    const extra = await getSimExtra(claroRequest, sim);
+    const extra = await getSimExtra(req3, sim);
     const imsi = extra.imsi || extractIMSI(sim);
 
-    const r = await claroRequest({
+    const r = await req3({
       method: "post",
       url: `${BASE_URL}/gcapi/sim/reset`,
       data: { imsi },
