@@ -130,55 +130,72 @@ function extractIMSI(item) {
   );
 }
 
-// =========================
-// 🔥 CICLO CORREGIDO: 28 → 27
-// =========================
+// 🔥 CICLO ORIGINAL (28 → 26) - SIN CAMBIOS
 function getDateRange() {
   const now = new Date();
+
   let start, end;
 
-  if (now.getDate() >= 28) {
+  if (now.getDate() >= 27) {
     start = new Date(now.getFullYear(), now.getMonth(), 28);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 26);
   } else {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
-    end = new Date(now.getFullYear(), now.getMonth(), 27);
+    end = new Date(now.getFullYear(), now.getMonth(), 26);
   }
 
   const format = (d) => d.toISOString().split("T")[0];
+
   return { start: format(start), end: format(end) };
 }
 
 // =========================
-// 🔥 CONSUMO CORREGIDO (optimizado y preciso)
+// 🔥 CONSUMO CORREGIDO (día por día con manejo robusto)
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const { start, end } = getDateRange();
 
-  const [uplink, downlink] = await Promise.all([
-    request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/simUplink/usage`,
-      data: { imsi, startDate: start, endDate: end },
-    }).catch(() => null),
-    request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/simDownlink/usage`,
-      data: { imsi, startDate: start, endDate: end },
-    }).catch(() => null),
-  ]);
+  // Generar todas las fechas del rango
+  const dates = [];
+  let current = new Date(start);
+  const endDate = new Date(end);
+  while (current <= endDate) {
+    dates.push(current.toISOString().split("T")[0]);
+    current.setDate(current.getDate() + 1);
+  }
 
-  const sumTotal = (response) => {
-    if (!response?.data?.object) return 0;
-    return response.data.object.reduce((acc, day) => {
-      const mb = day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0;
-      return acc + Number(mb);
-    }, 0);
-  };
+  let totalMB = 0;
 
-  const totalMB = sumTotal(uplink) + sumTotal(downlink);
+  // Procesar en lotes de 5 días para no saturar
+  const chunkSize = 5;
+  for (let i = 0; i < dates.length; i += chunkSize) {
+    const chunk = dates.slice(i, i + chunkSize);
+    const promises = chunk.flatMap(date => [
+      request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/simUplink/usage`,
+        data: { imsi, startDate: date, endDate: date }
+      }).catch(() => null),
+      request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/simDownlink/usage`,
+        data: { imsi, startDate: date, endDate: date }
+      }).catch(() => null)
+    ]);
+
+    const results = await Promise.all(promises);
+
+    for (const res of results) {
+      if (res && res.data && res.data.object && res.data.object.length > 0) {
+        const dayObj = res.data.object[0];
+        const mb = dayObj["totalBytes(MB)"] ?? dayObj["totalbytes(MB)"] ?? 0;
+        totalMB += Number(mb);
+      }
+    }
+  }
+
   return { consumoMB: Number(totalMB.toFixed(3)) };
 }
 
