@@ -130,73 +130,60 @@ function extractIMSI(item) {
   );
 }
 
-// 🔥 CICLO ORIGINAL (28 → 26) - SIN CAMBIOS
+// =========================
+// 🔥 CICLO CORREGIDO: 28 → 27 (estándar de facturación)
+// =========================
 function getDateRange() {
   const now = new Date();
-
   let start, end;
 
-  if (now.getDate() >= 27) {
+  // Día de corte: 28
+  if (now.getDate() >= 28) {
+    // Ciclo actual: 28 de este mes → 27 del próximo
     start = new Date(now.getFullYear(), now.getMonth(), 28);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 26);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 27);
   } else {
+    // Ciclo anterior: 28 del mes pasado → 27 de este mes
     start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
-    end = new Date(now.getFullYear(), now.getMonth(), 26);
+    end = new Date(now.getFullYear(), now.getMonth(), 27);
   }
 
   const format = (d) => d.toISOString().split("T")[0];
-
   return { start: format(start), end: format(end) };
 }
 
 // =========================
-// 🔥 CONSUMO CORREGIDO (día por día con manejo robusto)
+// 🔥 CONSUMO USANDO ENDPOINT CONFIABLE /device/dataUsage
 // =========================
 async function fetchUsage(request, imsi) {
   if (!imsi) return { consumoMB: 0 };
 
   const { start, end } = getDateRange();
 
-  // Generar todas las fechas del rango
-  const dates = [];
-  let current = new Date(start);
-  const endDate = new Date(end);
-  while (current <= endDate) {
-    dates.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
+  // Formato de fecha requerido por la API: "YYYY-MM-DD HH:MM"
+  const fromDate = `${start} 00:00`;
+  const toDate = `${end} 23:59`;
+
+  try {
+    const response = await request({
+      method: "get",
+      url: `${BASE_URL}/gcapi/device/dataUsage`,
+      params: {
+        imsi: imsi,
+        fromDate: fromDate,
+        toDate: toDate,
+      },
+    });
+
+    // El campo totalUsage viene en bytes
+    const totalBytes = response.data?.totalUsage || 0;
+    const totalMB = totalBytes / (1024 * 1024);
+
+    return { consumoMB: Number(totalMB.toFixed(3)) };
+  } catch (error) {
+    console.error("Error en fetchUsage:", error?.response?.data || error.message);
+    return { consumoMB: 0 };
   }
-
-  let totalMB = 0;
-
-  // Procesar en lotes de 5 días para no saturar
-  const chunkSize = 5;
-  for (let i = 0; i < dates.length; i += chunkSize) {
-    const chunk = dates.slice(i, i + chunkSize);
-    const promises = chunk.flatMap(date => [
-      request({
-        method: "post",
-        url: `${BASE_URL}/gcapi/simUplink/usage`,
-        data: { imsi, startDate: date, endDate: date }
-      }).catch(() => null),
-      request({
-        method: "post",
-        url: `${BASE_URL}/gcapi/simDownlink/usage`,
-        data: { imsi, startDate: date, endDate: date }
-      }).catch(() => null)
-    ]);
-
-    const results = await Promise.all(promises);
-
-    for (const res of results) {
-      if (res && res.data && res.data.object && res.data.object.length > 0) {
-        const dayObj = res.data.object[0];
-        const mb = dayObj["totalBytes(MB)"] ?? dayObj["totalbytes(MB)"] ?? 0;
-        totalMB += Number(mb);
-      }
-    }
-  }
-
-  return { consumoMB: Number(totalMB.toFixed(3)) };
 }
 
 // =========================
@@ -275,7 +262,8 @@ function buildEndpoint(path, requestFn) {
         plan: extra.plan,
         consumoMB: consumo.consumoMB,
       });
-    } catch {
+    } catch (error) {
+      console.error("Error en endpoint:", error.message);
       res.json({ ok: false });
     }
   });
@@ -297,7 +285,8 @@ function buildReset(path, requestFn) {
       });
 
       res.json({ ok: true, data: r.data });
-    } catch {
+    } catch (error) {
+      console.error("Error en reset:", error.message);
       res.json({ ok: false });
     }
   });
