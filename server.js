@@ -133,135 +133,117 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🔥 CICLO DE FACTURACIÓN CORREGIDO (28 → ayer)
-// =========================
-function getDateRange() {
-  const now = new Date();
-  let start;
-
-  // Día de inicio: 28 del mes actual o del anterior
-  if (now.getDate() >= 28) {
-    start = new Date(now.getFullYear(), now.getMonth(), 28);
-  } else {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 28);
-  }
-
-  // Fecha final: ayer
-  const end = new Date(now);
-  end.setDate(now.getDate() - 1);
-
-  // Formato de fecha estricto YYYY-MM-DD
-  const format = (d) => d.toISOString().split("T")[0];
-  return { start: format(start), end: format(end) };
-}
-
-// =========================
 // 🧠 CACHE (2 minutos)
 // =========================
 const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔥 FUNCIÓN PARA OBTENER EL entAccount.id DEL DISPOSITIVO
-// =========================
-let cachedAccountId = null;
-let cachedAccountIdImsi = null;
-
-async function getDeviceAccountId(request, imsi) {
-  if (cachedAccountIdImsi === imsi && cachedAccountId && Date.now() - cachedAccountId.time < CACHE_TIME) {
-    return cachedAccountId.id;
-  }
-
-  try {
-    const res = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/get/sims`,
-      data: { imsis: imsi }
-    });
-    
-    const device = res.data?.devices?.find(d => d.imsi === imsi);
-    if (device && device.entAccount && device.entAccount.id) {
-      const accountId = device.entAccount.id;
-      console.log(`📌 Account ID (entAccount.id) obtenido para IMSI ${imsi}: ${accountId}`);
-      cachedAccountId = { id: accountId, time: Date.now() };
-      cachedAccountIdImsi = imsi;
-      return accountId;
-    } else {
-      console.log(`⚠️ No se encontró entAccount.id para IMSI ${imsi}.`);
-      return null;
-    }
-  } catch (err) {
-    console.error(`❌ Error al obtener entAccount.id: ${err.message}`);
-    return null;
-  }
-}
-
-// =========================
-// 🔥 CONSUMO REAL (CORREGIDO)
+// 🔥 CONSUMO REAL TOTAL (copia exacta del código antiguo que funcionaba)
 // =========================
 async function fetchUsage(request, imsi) {
-  if (!imsi) return { consumoMB: 0 };
-
-  const cached = usageCache.get(imsi);
-  if (cached && Date.now() - cached.time < CACHE_TIME) {
-    console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
-    return cached.data;
-  }
-
-  const { start, end } = getDateRange();
-  console.log(`📅 Período facturación (real): ${start} → ${end}`);
-
-  const accountId = await getDeviceAccountId(request, imsi);
-  if (!accountId) {
-    console.log(`❌ No se pudo obtener accountId.`);
-    return { consumoMB: 0 };
-  }
-  console.log(`🏢 Usando Account ID: ${accountId}`);
-
-  let totalMB = 0;
-
-  // MÉTODO PRINCIPAL: /gcapi/sim/Data/Usage
   try {
-    const res = await request({
-      method: "post",
-      url: `${BASE_URL}/gcapi/sim/Data/Usage`,
-      data: {
-        startDate: start,
-        endDate: end,
-        offset: 0,
-        limit: 100,
-        imsi: imsi,
-        accountId: accountId,
-      },
-      timeout: 15000,
+    if (!imsi) return { consumoMB: 0 };
+
+    // CACHE
+    const cached = usageCache.get(imsi);
+    if (cached && Date.now() - cached.time < CACHE_TIME) {
+      console.log("⚡ CACHE HIT");
+      return cached.data;
+    }
+
+    const now = new Date();
+
+    let start, end;
+
+    // Ciclo de facturación original: 27 → 25
+    if (now.getDate() >= 27) {
+      start = new Date(now.getFullYear(), now.getMonth(), 27);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
+      end = new Date(now.getFullYear(), now.getMonth(), 25);
+    }
+
+    const format = (d) => d.toISOString().split("T")[0];
+
+    const dates = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      dates.push(format(new Date(d)));
+    }
+
+    let totalMB = 0;
+    const BATCH_SIZE = 6;
+
+    // 🔥 UPLINK + DOWNLINK (día por día)
+    for (let i = 0; i < dates.length; i += BATCH_SIZE) {
+      const batch = dates.slice(i, i + BATCH_SIZE);
+
+      const responses = await Promise.all(
+        batch.map((date) =>
+          Promise.all([
+            request({
+              method: "post",
+              url: `${BASE_URL}/gcapi/simUplink/usage`,
+              data: { imsi, startDate: date, endDate: date },
+            }).catch(() => null),
+            request({
+              method: "post",
+              url: `${BASE_URL}/gcapi/simDownlink/usage`,
+              data: { imsi, startDate: date, endDate: date },
+            }).catch(() => null),
+          ])
+        )
+      );
+
+      responses.forEach((pair) => {
+        if (!pair) return;
+        const [up, down] = pair;
+        const upList = up?.data?.object || [];
+        const downList = down?.data?.object || [];
+        upList.forEach((i) => {
+          totalMB += Number(i["totalBytes(MB)"] || 0);
+        });
+        downList.forEach((i) => {
+          totalMB += Number(i["totalBytes(MB)"] || 0);
+        });
+      });
+    }
+
+    // 🔥 SESSION HISTORY (sesiones activas)
+    try {
+      const r = await request({
+        method: "post",
+        url: `${BASE_URL}/gcapi/device/sessionHistory`,
+        data: {
+          imsi: imsi,
+          startDate: format(start),
+          endDate: format(end),
+        },
+      });
+      const sessions = r.data?.data || [];
+      sessions.forEach((s) => {
+        totalMB += Number(s.totalBytes || 0) / (1024 * 1024);
+      });
+    } catch (err) {
+      console.log("⚠️ sessionHistory falló (no afecta el total)");
+    }
+
+    const result = {
+      consumoMB: Number(totalMB.toFixed(3)),
+    };
+
+    usageCache.set(imsi, {
+      time: Date.now(),
+      data: result,
     });
 
-    if (!usageCache.has(imsi)) {
-      console.log("📦 Respuesta de /sim/Data/Usage:", JSON.stringify(res.data, null, 2));
-    }
-
-    const items = res.data?.object || [];
-    let totalKB = 0;
-    for (const item of items) {
-      if (item.servedImsi === imsi) {
-        totalKB += parseFloat(item.totalBytesInKb || 0);
-      }
-    }
-    totalMB = totalKB / 1024;
-    if (totalMB > 0) {
-      console.log(`✅ /sim/Data/Usage → ${totalMB.toFixed(3)} MB`);
-    } else {
-      console.log(`⚠️ /sim/Data/Usage devolvió 0 MB.`);
-    }
-  } catch (err) {
-    console.error(`❌ Error en /sim/Data/Usage: ${err.message}`);
-    if (err.response) console.error(`   Status: ${err.response.status}, Data:`, err.response.data);
+    console.log(`🔥 CONSUMO FINAL: ${totalMB.toFixed(3)} MB`);
+    return result;
+  } catch (e) {
+    console.error("Error en fetchUsage:", e.message);
+    return { consumoMB: 0 };
   }
-
-  const result = { consumoMB: Number(totalMB.toFixed(3)) };
-  usageCache.set(imsi, { time: Date.now(), data: result });
-  console.log(`🎯 CONSUMO TOTAL FINAL: ${result.consumoMB} MB`);
-  return result;
 }
 
 // =========================
@@ -388,6 +370,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // 🚀 START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CORREGIDO - Usando formato de fecha YYYY-MM-DD y entAccount.id");
-  console.log("📅 Ciclo facturación: 28 del período anterior → ayer");
+  console.log("🚀 SERVER CON CONSUMO REAL (método antiguo: ciclo 27→25, uplink+downlink+sessionHistory)");
+  console.log("📅 Ciclo de facturación: 27 → 25");
+  console.log("🔍 Sin factores ni overrides, todo automático");
 });
