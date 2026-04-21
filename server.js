@@ -15,7 +15,7 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
 // =========================
-// 🔥 CUENTA ORIGINAL
+//  CUENTA ORIGINAL
 // =========================
 const USERNAME = "alfben";
 const PASSWORD = "Soporte122@";
@@ -24,7 +24,7 @@ let TOKEN = null;
 let TOKEN_TIME = 0;
 
 // =========================
-// 🔥 CUENTAS EXTRA
+//  CUENTAS EXTRA
 // =========================
 const ACCOUNTS_EXTRA = {
   cuenta2: {
@@ -44,7 +44,7 @@ const ACCOUNTS_EXTRA = {
 const TOKEN_DURATION = 50 * 60 * 1000;
 
 // =========================
-// 🔐 TOKEN ORIGINAL
+//  TOKEN ORIGINAL
 // =========================
 async function getToken() {
   const r = await axios({
@@ -66,7 +66,7 @@ async function ensureToken() {
 }
 
 // =========================
-// 🔐 TOKEN EXTRA
+//  TOKEN EXTRA
 // =========================
 async function ensureTokenExtra(key) {
   const acc = ACCOUNTS_EXTRA[key];
@@ -89,7 +89,7 @@ async function ensureTokenExtra(key) {
 }
 
 // =========================
-// 🔥 REQUEST
+//  REQUEST
 // =========================
 async function claroRequest(config) {
   await ensureToken();
@@ -120,7 +120,7 @@ async function claroRequestExtra(key, config) {
 }
 
 // =========================
-// 🔹 FUNCIONES GENERALES
+//  FUNCIONES GENERALES
 // =========================
 function extractIMSI(item) {
   return (
@@ -133,13 +133,13 @@ function extractIMSI(item) {
 }
 
 // =========================
-// 🧠 CACHE (2 minutos)
+//  CACHE (2 minutos)
 // =========================
 const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-// 🔧 FACTOR DE CORRECCIÓN GLOBAL
+//  FACTOR DE CORRECCIÓN GLOBAL
 // =========================
 // Calculado como: valor real en plataforma (4.585) / valor obtenido por API (2.41) = 1.902
 // Si para otras SIMs la relación es diferente, ajusta este número o añade factores específicos por ICCID.
@@ -151,7 +151,7 @@ const FACTORES_POR_ICCID = {
 };
 
 // =========================
-// 🔥 CONSUMO DÍA POR DÍA (MÉTODO CONFIABLE) + FACTOR
+//  CONSUMO DÍA POR DÍA (MÉTODO CONFIABLE) + FACTOR
 // =========================
 async function fetchUsage(request, imsi, iccid) {
   if (!imsi) return { consumoMB: 0 };
@@ -242,7 +242,7 @@ async function fetchUsage(request, imsi, iccid) {
 }
 
 // =========================
-// 🔥 CORE (sin cambios)
+//  CORE (sin cambios)
 // =========================
 async function fetchSim(request, value) {
   const r = await request({
@@ -292,7 +292,7 @@ async function getTotalSims(request) {
 }
 
 // =========================
-// 🔥 ENDPOINTS + RESET
+//  ENDPOINTS + RESET
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
@@ -362,7 +362,7 @@ buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cf
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
 
 // =========================
-// 🚀 START
+//  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL");
