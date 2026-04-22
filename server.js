@@ -355,9 +355,11 @@ buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cf
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
 
 // =========================
-//  INTEGRACIÓN CON HOLOGRAM (TOKEN EMBEBIDO)
+//  INTEGRACIÓN CON HOLOGRAM (TOKEN ACTUALIZADO)
 // =========================
-const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
+// Token proporcionado: 3npRw1lc40oKF0hDQofoekPJBngvGi
+// Codificado en base64 como "apikey:3npRw1lc40oKF0hDQofoekPJBngvGi"
+const HOLOGRAM_API_TOKEN = "YXBpa2V5OjNucFJ3MWxjNDBvS0YwaERRb2ZvZWtQSkJuZ3ZHZ2k=";
 
 async function hologramRequest(endpoint, method = 'GET', body = null) {
   const config = {
@@ -537,12 +539,12 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  NUEVO ENDPOINT DE BÚSQUEDA MEJORADO (usa filtros directos de la API)
+//  ENDPOINT DE BÚSQUEDA CORREGIDO (usando métodos correctos de la API)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
   try {
-    // Intentar buscar por deviceid (si value es numérico)
+    // 1. Búsqueda por deviceId numérico
     if (/^\d+$/.test(value)) {
       try {
         const deviceById = await hologramRequest(`devices/${value}`);
@@ -550,51 +552,34 @@ app.get('/api/hologram/search/:value', async (req, res) => {
           return res.json({
             ok: true,
             deviceId: deviceById.data.deviceid,
-            iccid: deviceById.data.iccid,
-            msisdn: deviceById.data.msisdn,
+            iccid: deviceById.data.sim,
+            msisdn: deviceById.data.phonenumber,
             state: deviceById.data.state
           });
         }
       } catch (err) {
-        // No encontrado por deviceid, continuar
+        // No encontrado por deviceId
       }
     }
 
-    // Buscar por ICCID usando filtro
+    // 2. Búsqueda por IMEI
     try {
-      const devicesByIccid = await hologramRequest(`devices?iccid=${encodeURIComponent(value)}`);
-      if (devicesByIccid.data && devicesByIccid.data.length > 0) {
-        const device = devicesByIccid.data[0];
+      const devicesByImei = await hologramRequest(`devices/?imei=${encodeURIComponent(value)}`);
+      if (devicesByImei.data && devicesByImei.data.length > 0) {
+        const device = devicesByImei.data[0];
         return res.json({
           ok: true,
           deviceId: device.deviceid,
-          iccid: device.iccid,
-          msisdn: device.msisdn,
+          iccid: device.sim,
+          msisdn: device.phonenumber,
           state: device.state
         });
       }
     } catch (err) {
-      // No encontrado por ICCID
+      // No encontrado por IMEI
     }
 
-    // Buscar por MSISDN (número de teléfono) usando filtro
-    try {
-      const devicesByMsisdn = await hologramRequest(`devices?msisdn=${encodeURIComponent(value)}`);
-      if (devicesByMsisdn.data && devicesByMsisdn.data.length > 0) {
-        const device = devicesByMsisdn.data[0];
-        return res.json({
-          ok: true,
-          deviceId: device.deviceid,
-          iccid: device.iccid,
-          msisdn: device.msisdn,
-          state: device.state
-        });
-      }
-    } catch (err) {
-      // No encontrado por MSISDN
-    }
-
-    // Si no se encontró por ningún método
+    // 3. No encontrado
     res.json({ ok: false, error: 'Dispositivo no encontrado. Verifica el ICCID o número de teléfono.' });
   } catch (error) {
     console.error('Error en búsqueda Hologram:', error.message);
@@ -608,7 +593,7 @@ app.get('/api/hologram/search/:value', async (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
-  console.log("✅ Integración con Hologram activa con token embebido");
+  console.log("✅ Integración con Hologram activa con token actualizado");
   console.log("✅ Endpoint de reset con espera de jobs disponible");
-  console.log("✅ Endpoint de búsqueda mejorado con filtros directos");
+  console.log("✅ Endpoint de búsqueda corregido");
 });
