@@ -537,6 +537,36 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
+//  NUEVO ENDPOINT: BÚSQUEDA DE DISPOSITIVO HOLOGRAM POR ICCID, MSISDN O DEVICEID
+// =========================
+app.get('/api/hologram/search/:value', async (req, res) => {
+  const { value } = req.params;
+  try {
+    // Obtener todos los dispositivos (límite alto para cubrir la mayoría de casos)
+    const devices = await hologramRequest('devices?limit=2000');
+    const found = devices.data?.find(d => 
+      d.iccid === value || 
+      d.msisdn === value || 
+      d.deviceid.toString() === value
+    );
+    if (found) {
+      res.json({ 
+        ok: true, 
+        deviceId: found.deviceid, 
+        iccid: found.iccid, 
+        msisdn: found.msisdn,
+        state: found.state
+      });
+    } else {
+      res.json({ ok: false, error: 'Dispositivo no encontrado' });
+    }
+  } catch (error) {
+    console.error('Error en búsqueda Hologram:', error.message);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// =========================
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
@@ -544,4 +574,5 @@ app.listen(process.env.PORT || 3000, () => {
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("✅ Integración con Hologram activa con token embebido");
   console.log("✅ Endpoint de reset con espera de jobs disponible");
+  console.log("✅ Endpoint de búsqueda /api/hologram/search/:value disponible");
 });
