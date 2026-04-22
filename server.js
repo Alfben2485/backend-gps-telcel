@@ -357,7 +357,6 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM (TOKEN ACTUALIZADO)
 // =========================
-// Token proporcionado: YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
 async function hologramRequest(endpoint, method = 'GET', body = null) {
@@ -534,16 +533,20 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA MEJORADO (con paginación)
+//  ENDPOINT DE BÚSQUEDA CORREGIDO (usa filtros directos y logs)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
+  console.log(`🔍 Buscando dispositivo Hologram con valor: ${value}`);
+
   try {
-    // 1. Búsqueda por deviceId numérico
+    // 1. Si el valor es numérico, probar como deviceId
     if (/^\d+$/.test(value)) {
       try {
+        console.log(`Intentando búsqueda por deviceId: ${value}`);
         const deviceById = await hologramRequest(`devices/${value}`);
         if (deviceById.data) {
+          console.log(`✅ Encontrado por deviceId: ${deviceById.data.deviceid}`);
           return res.json({
             ok: true,
             deviceId: deviceById.data.deviceid,
@@ -553,15 +556,18 @@ app.get('/api/hologram/search/:value', async (req, res) => {
           });
         }
       } catch (err) {
-        // No encontrado por deviceId
+        console.log(`No encontrado por deviceId: ${err.message}`);
       }
     }
 
-    // 2. Búsqueda por IMEI
+    // 2. Búsqueda por ICCID (sim) usando filtro
+    // La API permite: /devices?sim=xxxxxxxxx
+    console.log(`Intentando búsqueda por ICCID (sim): ${value}`);
     try {
-      const devicesByImei = await hologramRequest(`devices/?imei=${encodeURIComponent(value)}`);
-      if (devicesByImei.data && devicesByImei.data.length > 0) {
-        const device = devicesByImei.data[0];
+      const devicesBySim = await hologramRequest(`devices?sim=${encodeURIComponent(value)}`);
+      if (devicesBySim.data && devicesBySim.data.length > 0) {
+        const device = devicesBySim.data[0];
+        console.log(`✅ Encontrado por ICCID: ${device.deviceid}`);
         return res.json({
           ok: true,
           deviceId: device.deviceid,
@@ -569,12 +575,36 @@ app.get('/api/hologram/search/:value', async (req, res) => {
           msisdn: device.phonenumber,
           state: device.state
         });
+      } else {
+        console.log(`No se encontraron dispositivos con sim=${value}`);
       }
     } catch (err) {
-      // No encontrado por IMEI
+      console.log(`Error en búsqueda por sim: ${err.message}`);
     }
 
-    // 3. Búsqueda paginada por ICCID (sim) o MSISDN (phonenumber)
+    // 3. Búsqueda por número de teléfono (phonenumber)
+    console.log(`Intentando búsqueda por MSISDN (phonenumber): ${value}`);
+    try {
+      const devicesByPhone = await hologramRequest(`devices?phonenumber=${encodeURIComponent(value)}`);
+      if (devicesByPhone.data && devicesByPhone.data.length > 0) {
+        const device = devicesByPhone.data[0];
+        console.log(`✅ Encontrado por MSISDN: ${device.deviceid}`);
+        return res.json({
+          ok: true,
+          deviceId: device.deviceid,
+          iccid: device.sim,
+          msisdn: device.phonenumber,
+          state: device.state
+        });
+      } else {
+        console.log(`No se encontraron dispositivos con phonenumber=${value}`);
+      }
+    } catch (err) {
+      console.log(`Error en búsqueda por phonenumber: ${err.message}`);
+    }
+
+    // 4. Como último recurso, recorrer páginas (si hay muchos dispositivos y los filtros no funcionan)
+    console.log(`Iniciando búsqueda paginada...`);
     let page = 1;
     let found = null;
     while (!found) {
@@ -585,6 +615,7 @@ app.get('/api/hologram/search/:value', async (req, res) => {
       page++;
     }
     if (found) {
+      console.log(`✅ Encontrado por paginación: ${found.deviceid}`);
       return res.json({
         ok: true,
         deviceId: found.deviceid,
@@ -594,7 +625,7 @@ app.get('/api/hologram/search/:value', async (req, res) => {
       });
     }
 
-    // No encontrado
+    console.log(`❌ No se encontró ningún dispositivo con el valor: ${value}`);
     res.json({ ok: false, error: 'Dispositivo no encontrado. Verifica el ICCID o número de teléfono.' });
   } catch (error) {
     console.error('Error en búsqueda Hologram:', error.message);
@@ -609,6 +640,5 @@ app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("✅ Integración con Hologram activa con token actualizado");
-  console.log("✅ Endpoint de reset con espera de jobs disponible");
-  console.log("✅ Endpoint de búsqueda mejorado con paginación");
+  console.log("✅ Endpoint de búsqueda mejorado con logs y filtros directos");
 });
