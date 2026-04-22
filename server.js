@@ -357,7 +357,6 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM (TOKEN EMBEBIDO)
 // =========================
-// Token fijo proporcionado por el Ing. Oswaldo (base64 de "apikey:6KIYDqQtUzppfEreqxCKHMQXLJ1kv")
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
 async function hologramRequest(endpoint, method = 'GET', body = null) {
@@ -476,11 +475,73 @@ app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
 });
 
 // =========================
+//  RESET DE DISPOSITIVO HOLOGRAM (PAUSA + REACTIVACIÓN CON ESPERA)
+// =========================
+app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
+  const { deviceId } = req.params;
+  const deviceIdNum = parseInt(deviceId);
+  if (isNaN(deviceIdNum)) {
+    return res.status(400).json({ ok: false, error: 'Device ID inválido' });
+  }
+
+  async function waitForJob(jobId, timeoutMs = 40000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const jobStatus = await hologramRequest(`jobs/${jobId}`);
+      const status = jobStatus.data?.status;
+      if (status === 'COMPLETED') return true;
+      if (status === 'FAILED') throw new Error(`Job ${jobId} falló`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    throw new Error(`Timeout esperando el job ${jobId}`);
+  }
+
+  try {
+    // Pausar
+    const pausePayload = {
+      data: {
+        preview: false,
+        valid_tasks: [{
+          endpoint: "/1/devices/state",
+          params: { state: "pause", deviceids: [deviceIdNum], in_transaction: true }
+        }]
+      }
+    };
+    const pauseResult = await hologramRequest('devices/batch/state', 'POST', pausePayload);
+    const jobIdPause = pauseResult.data?.jobid;
+    if (!jobIdPause) throw new Error('No se recibió jobid al pausar');
+    await waitForJob(jobIdPause);
+    console.log(`✅ Dispositivo ${deviceIdNum} pausado`);
+
+    // Reactivar
+    const livePayload = {
+      data: {
+        preview: false,
+        valid_tasks: [{
+          endpoint: "/1/devices/state",
+          params: { state: "live", deviceids: [deviceIdNum], in_transaction: true }
+        }]
+      }
+    };
+    const liveResult = await hologramRequest('devices/batch/state', 'POST', livePayload);
+    const jobIdLive = liveResult.data?.jobid;
+    if (!jobIdLive) throw new Error('No se recibió jobid al reactivar');
+    await waitForJob(jobIdLive);
+    console.log(`✅ Dispositivo ${deviceIdNum} reactivado`);
+
+    res.json({ ok: true, message: 'Reset completado exitosamente (pausa y reactivación)' });
+  } catch (error) {
+    console.error('Error en reset Hologram:', error.message);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// =========================
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
-  console.log("📌 Para ajustar, cambia el valor de FACTOR_GLOBAL en el código.");
   console.log("✅ Integración con Hologram activa con token embebido");
+  console.log("✅ Endpoint de reset con espera de jobs disponible");
 });
