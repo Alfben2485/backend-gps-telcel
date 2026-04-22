@@ -141,17 +141,14 @@ const CACHE_TIME = 2 * 60 * 1000;
 // =========================
 //  FACTOR DE CORRECCIÓN GLOBAL
 // =========================
-// Calculado como: valor real en plataforma (4.585) / valor obtenido por API (2.41) = 1.902
-// Si para otras SIMs la relación es diferente, ajusta este número o añade factores específicos por ICCID.
 const FACTOR_GLOBAL = 1.902;
 
-// Factores específicos por ICCID (opcional, sobrescribe al global)
 const FACTORES_POR_ICCID = {
-  // "8952020923346156758": 1.902, // ya está cubierto por el global
+  // "8952020923346156758": 1.902,
 };
 
 // =========================
-//  CONSUMO DÍA POR DÍA (MÉTODO CONFIABLE) + FACTOR
+//  CONSUMO DÍA POR DÍA + FACTOR
 // =========================
 async function fetchUsage(request, imsi, iccid) {
   if (!imsi) return { consumoMB: 0 };
@@ -165,7 +162,6 @@ async function fetchUsage(request, imsi, iccid) {
   const now = new Date();
   let start, end;
 
-  // Ciclo de facturación original que funcionaba: 27 → 25
   if (now.getDate() >= 27) {
     start = new Date(now.getFullYear(), now.getMonth(), 27);
     end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
@@ -184,7 +180,6 @@ async function fetchUsage(request, imsi, iccid) {
   let totalMB = 0;
   const BATCH_SIZE = 6;
 
-  // UPLINK + DOWNLINK día por día
   for (let i = 0; i < dates.length; i += BATCH_SIZE) {
     const batch = dates.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
@@ -210,7 +205,6 @@ async function fetchUsage(request, imsi, iccid) {
     }
   }
 
-  // SESSION HISTORY
   try {
     const sessionRes = await request({
       method: "post",
@@ -229,7 +223,6 @@ async function fetchUsage(request, imsi, iccid) {
     console.log("⚠️ sessionHistory falló");
   }
 
-  // Aplicar factor de corrección
   const factor = FACTORES_POR_ICCID[iccid] || FACTOR_GLOBAL;
   const consumoFinal = totalMB * factor;
   const rounded = Number(consumoFinal.toFixed(3));
@@ -362,10 +355,132 @@ buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cf
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
 
 // =========================
+//  INTEGRACIÓN CON HOLOGRAM (TOKEN EMBEBIDO)
+// =========================
+// Token fijo proporcionado por el Ing. Oswaldo (base64 de "apikey:6KIYDqQtUzppfEreqxCKHMQXLJ1kv")
+const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
+
+async function hologramRequest(endpoint, method = 'GET', body = null) {
+  const config = {
+    method: method,
+    url: `https://dashboard.hologram.io/api/1/${endpoint}`,
+    headers: {
+      'Authorization': `Basic ${HOLOGRAM_API_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    timeout: 15000,
+    httpsAgent: agent
+  };
+  if (body) {
+    config.data = body;
+  }
+  try {
+    const response = await axios(config);
+    if (response.data && response.data.success === true) {
+      return response.data;
+    } else {
+      throw new Error(response.data?.error || 'Error desconocido en la API de Hologram');
+    }
+  } catch (error) {
+    console.error(`Error en llamada a Hologram (${endpoint}):`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Health Check
+app.get('/api/hologram/health', async (req, res) => {
+  try {
+    await hologramRequest('users/me');
+    res.json({ ok: true, message: 'Integración con Hologram funcionando correctamente.' });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Estado masivo (pausar/reanudar/desactivar)
+app.post('/api/hologram/batch-state', async (req, res) => {
+  const { state, deviceids, preview = false } = req.body;
+  if (!state || !['pause', 'live', 'deactivate'].includes(state)) {
+    return res.status(400).json({ ok: false, error: 'El campo "state" es requerido y debe ser "pause", "live" o "deactivate".' });
+  }
+  if (!deviceids || !Array.isArray(deviceids) || deviceids.length === 0) {
+    return res.status(400).json({ ok: false, error: 'El campo "deviceids" es requerido y debe ser un array no vacío de números.' });
+  }
+  try {
+    const payload = {
+      data: {
+        preview: preview,
+        valid_tasks: [
+          {
+            endpoint: "/1/devices/state",
+            params: {
+              state: state,
+              deviceids: deviceids,
+              in_transaction: true
+            }
+          }
+        ]
+      }
+    };
+    const result = await hologramRequest('devices/batch/state', 'POST', payload);
+    res.json({ ok: true, jobid: result.data?.jobid, message: `Solicitud de cambio de estado a '${state}' enviada.` });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Consulta de uso de datos
+app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
+  const { deviceId } = req.params;
+  let { startDate, endDate } = req.query;
+  const deviceIdNum = parseInt(deviceId);
+  if (isNaN(deviceIdNum)) {
+    return res.status(400).json({ ok: false, error: 'El deviceId debe ser un número.' });
+  }
+  let startTimestamp, endTimestamp;
+  const now = new Date();
+  if (!startDate || !endDate) {
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+    const start = new Date(now);
+    start.setDate(now.getDate() - 30);
+    start.setHours(0, 0, 0, 0);
+    startTimestamp = Math.floor(start.getTime() / 1000);
+    endTimestamp = Math.floor(end.getTime() / 1000);
+  } else {
+    startTimestamp = Math.floor(new Date(startDate).getTime() / 1000);
+    endTimestamp = Math.floor(new Date(endDate).getTime() / 1000);
+    if (isNaN(startTimestamp) || isNaN(endTimestamp)) {
+      return res.status(400).json({ ok: false, error: 'Formato de fecha inválido. Usa YYYY-MM-DD.' });
+    }
+  }
+  try {
+    const usageData = await hologramRequest(`usage/data?deviceid=${deviceIdNum}×tart=${startTimestamp}&timeend=${endTimestamp}`);
+    let totalBytes = 0;
+    if (usageData.data && Array.isArray(usageData.data)) {
+      for (const record of usageData.data) {
+        totalBytes += record.bytes || 0;
+      }
+    }
+    const totalMB = (totalBytes / (1024 * 1024)).toFixed(3);
+    res.json({
+      ok: true,
+      deviceId: deviceIdNum,
+      totalMB: parseFloat(totalMB),
+      startDate: new Date(startTimestamp * 1000).toISOString().split('T')[0],
+      endDate: new Date(endTimestamp * 1000).toISOString().split('T')[0]
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// =========================
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL");
+  console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("📌 Para ajustar, cambia el valor de FACTOR_GLOBAL en el código.");
+  console.log("✅ Integración con Hologram activa con token embebido");
 });
