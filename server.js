@@ -357,8 +357,6 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM (TOKEN ACTUALIZADO)
 // =========================
-// Token proporcionado: 3npRw1lc40oKF0hDQofoekPJBngvGi
-// Codificado en base64 como "apikey:3npRw1lc40oKF0hDQofoekPJBngvGi"
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjNucFJ3MWxjNDBvS0YwaERRb2ZvZWtQSkJuZ3ZHZ2k=";
 
 async function hologramRequest(endpoint, method = 'GET', body = null) {
@@ -398,7 +396,7 @@ app.get('/api/hologram/health', async (req, res) => {
   }
 });
 
-// Estado masivo (pausar/reanudar/desactivar)
+// Estado masivo
 app.post('/api/hologram/batch-state', async (req, res) => {
   const { state, deviceids, preview = false } = req.body;
   if (!state || !['pause', 'live', 'deactivate'].includes(state)) {
@@ -476,9 +474,7 @@ app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
   }
 });
 
-// =========================
-//  RESET DE DISPOSITIVO HOLOGRAM (PAUSA + REACTIVACIÓN CON ESPERA)
-// =========================
+// Reset con espera
 app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   const { deviceId } = req.params;
   const deviceIdNum = parseInt(deviceId);
@@ -499,7 +495,6 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   }
 
   try {
-    // Pausar
     const pausePayload = {
       data: {
         preview: false,
@@ -515,7 +510,6 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
     await waitForJob(jobIdPause);
     console.log(`✅ Dispositivo ${deviceIdNum} pausado`);
 
-    // Reactivar
     const livePayload = {
       data: {
         preview: false,
@@ -539,7 +533,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA CORREGIDO (usando métodos correctos de la API)
+//  ENDPOINT DE BÚSQUEDA MEJORADO (con paginación)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
@@ -579,7 +573,27 @@ app.get('/api/hologram/search/:value', async (req, res) => {
       // No encontrado por IMEI
     }
 
-    // 3. No encontrado
+    // 3. Búsqueda paginada por ICCID (sim) o MSISDN (phonenumber)
+    let page = 1;
+    let found = null;
+    while (!found) {
+      const devicesPage = await hologramRequest(`devices?page=${page}&limit=100`);
+      if (!devicesPage.data || devicesPage.data.length === 0) break;
+      found = devicesPage.data.find(d => d.sim === value || d.phonenumber === value);
+      if (found) break;
+      page++;
+    }
+    if (found) {
+      return res.json({
+        ok: true,
+        deviceId: found.deviceid,
+        iccid: found.sim,
+        msisdn: found.phonenumber,
+        state: found.state
+      });
+    }
+
+    // No encontrado
     res.json({ ok: false, error: 'Dispositivo no encontrado. Verifica el ICCID o número de teléfono.' });
   } catch (error) {
     console.error('Error en búsqueda Hologram:', error.message);
@@ -595,5 +609,5 @@ app.listen(process.env.PORT || 3000, () => {
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("✅ Integración con Hologram activa con token actualizado");
   console.log("✅ Endpoint de reset con espera de jobs disponible");
-  console.log("✅ Endpoint de búsqueda corregido");
+  console.log("✅ Endpoint de búsqueda mejorado con paginación");
 });
