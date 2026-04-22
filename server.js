@@ -357,7 +357,8 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM (TOKEN ACTUALIZADO)
 // =========================
-const HOLOGRAM_API_TOKEN = "YXBpa2V5OjNucFJ3MWxjNDBvS0YwaERRb2ZvZWtQSkJuZ3ZHZ2k=";
+// Token proporcionado: YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==
+const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
 async function hologramRequest(endpoint, method = 'GET', body = null) {
   const config = {
