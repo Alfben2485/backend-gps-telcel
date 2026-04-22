@@ -537,29 +537,65 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  NUEVO ENDPOINT: BÚSQUEDA DE DISPOSITIVO HOLOGRAM POR ICCID, MSISDN O DEVICEID
+//  NUEVO ENDPOINT DE BÚSQUEDA MEJORADO (usa filtros directos de la API)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
   try {
-    // Obtener todos los dispositivos (límite alto para cubrir la mayoría de casos)
-    const devices = await hologramRequest('devices?limit=2000');
-    const found = devices.data?.find(d => 
-      d.iccid === value || 
-      d.msisdn === value || 
-      d.deviceid.toString() === value
-    );
-    if (found) {
-      res.json({ 
-        ok: true, 
-        deviceId: found.deviceid, 
-        iccid: found.iccid, 
-        msisdn: found.msisdn,
-        state: found.state
-      });
-    } else {
-      res.json({ ok: false, error: 'Dispositivo no encontrado' });
+    // Intentar buscar por deviceid (si value es numérico)
+    if (/^\d+$/.test(value)) {
+      try {
+        const deviceById = await hologramRequest(`devices/${value}`);
+        if (deviceById.data) {
+          return res.json({
+            ok: true,
+            deviceId: deviceById.data.deviceid,
+            iccid: deviceById.data.iccid,
+            msisdn: deviceById.data.msisdn,
+            state: deviceById.data.state
+          });
+        }
+      } catch (err) {
+        // No encontrado por deviceid, continuar
+      }
     }
+
+    // Buscar por ICCID usando filtro
+    try {
+      const devicesByIccid = await hologramRequest(`devices?iccid=${encodeURIComponent(value)}`);
+      if (devicesByIccid.data && devicesByIccid.data.length > 0) {
+        const device = devicesByIccid.data[0];
+        return res.json({
+          ok: true,
+          deviceId: device.deviceid,
+          iccid: device.iccid,
+          msisdn: device.msisdn,
+          state: device.state
+        });
+      }
+    } catch (err) {
+      // No encontrado por ICCID
+    }
+
+    // Buscar por MSISDN (número de teléfono) usando filtro
+    try {
+      const devicesByMsisdn = await hologramRequest(`devices?msisdn=${encodeURIComponent(value)}`);
+      if (devicesByMsisdn.data && devicesByMsisdn.data.length > 0) {
+        const device = devicesByMsisdn.data[0];
+        return res.json({
+          ok: true,
+          deviceId: device.deviceid,
+          iccid: device.iccid,
+          msisdn: device.msisdn,
+          state: device.state
+        });
+      }
+    } catch (err) {
+      // No encontrado por MSISDN
+    }
+
+    // Si no se encontró por ningún método
+    res.json({ ok: false, error: 'Dispositivo no encontrado. Verifica el ICCID o número de teléfono.' });
   } catch (error) {
     console.error('Error en búsqueda Hologram:', error.message);
     res.status(500).json({ ok: false, error: error.message });
@@ -574,5 +610,5 @@ app.listen(process.env.PORT || 3000, () => {
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("✅ Integración con Hologram activa con token embebido");
   console.log("✅ Endpoint de reset con espera de jobs disponible");
-  console.log("✅ Endpoint de búsqueda /api/hologram/search/:value disponible");
+  console.log("✅ Endpoint de búsqueda mejorado con filtros directos");
 });
