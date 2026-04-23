@@ -143,9 +143,7 @@ const CACHE_TIME = 2 * 60 * 1000;
 // =========================
 const FACTOR_GLOBAL = 1.902;
 
-const FACTORES_POR_ICCID = {
-  // "8952020923346156758": 1.902,
-};
+const FACTORES_POR_ICCID = {};
 
 // =========================
 //  CONSUMO DÍA POR DÍA + FACTOR
@@ -216,9 +214,7 @@ async function fetchUsage(request, imsi, iccid) {
     for (const s of sessions) {
       sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
     }
-    if (sessionMB > 0) {
-      totalMB += sessionMB;
-    }
+    if (sessionMB > 0) totalMB += sessionMB;
   } catch (err) {
     console.log("⚠️ sessionHistory falló");
   }
@@ -235,21 +231,15 @@ async function fetchUsage(request, imsi, iccid) {
 }
 
 // =========================
-//  CORE (sin cambios)
+//  CORE
 // =========================
 async function fetchSim(request, value) {
   const r = await request({
     method: "post",
     url: `${BASE_URL}/gcapi/device/list`,
-    data: {
-      start: 0,
-      length: 10,
-      search: { value },
-    },
+    data: { start: 0, length: 10, search: { value } },
   });
-
   const items = r.data?.data || [];
-
   return items.find(
     (i) =>
       String(i.iccid).trim() === String(value).trim() ||
@@ -263,15 +253,10 @@ async function getSimExtra(request, sim) {
     url: `${BASE_URL}/gcapi/get/sims`,
     data: { msisdn: sim.msisdn },
   });
-
   const device = (r.data?.devices || []).find(
     (d) => String(d.iccid) === String(sim.iccid)
   );
-
-  return {
-    imsi: device?.imsi,
-    plan: device?.devicePlans?.planName || "N/A",
-  };
+  return { imsi: device?.imsi, plan: device?.devicePlans?.planName || "N/A" };
 }
 
 async function getTotalSims(request) {
@@ -280,12 +265,11 @@ async function getTotalSims(request) {
     url: `${BASE_URL}/gcapi/device/list`,
     data: { start: 0, length: 1 },
   });
-
   return r.data?.recordsFiltered || 0;
 }
 
 // =========================
-//  ENDPOINTS + RESET
+//  ENDPOINTS CLARO
 // =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
@@ -296,15 +280,12 @@ function buildEndpoint(path, requestFn) {
         clearTimeout(timeout);
         return res.json({ ok: false, error: "SIM no encontrada" });
       }
-
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
-
       const [consumo, totalSims] = await Promise.all([
         fetchUsage(requestFn, imsi, sim.iccid),
         getTotalSims(requestFn),
       ]);
-
       clearTimeout(timeout);
       res.json({
         ok: true,
@@ -328,16 +309,13 @@ function buildReset(path, requestFn) {
     try {
       const sim = await fetchSim(requestFn, req.params.value);
       if (!sim) return res.json({ ok: false, error: "SIM no encontrada" });
-
       const extra = await getSimExtra(requestFn, sim);
       const imsi = extra.imsi || extractIMSI(sim);
-
       const r = await requestFn({
         method: "post",
         url: `${BASE_URL}/gcapi/sim/reset`,
         data: { imsi },
       });
-
       res.json({ ok: true, data: r.data });
     } catch (error) {
       console.error("Error en reset:", error.message);
@@ -355,7 +333,7 @@ buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cf
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
 
 // =========================
-//  INTEGRACIÓN CON HOLOGRAM (TOKEN ACTUALIZADO)
+//  INTEGRACIÓN CON HOLOGRAM (SIN BÚSQUEDA, SOLO RESET Y CONSUMO)
 // =========================
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
@@ -370,9 +348,7 @@ async function hologramRequest(endpoint, method = 'GET', body = null) {
     timeout: 15000,
     httpsAgent: agent
   };
-  if (body) {
-    config.data = body;
-  }
+  if (body) config.data = body;
   try {
     const response = await axios(config);
     if (response.data && response.data.success === true) {
@@ -396,7 +372,7 @@ app.get('/api/hologram/health', async (req, res) => {
   }
 });
 
-// Estado masivo
+// Estado masivo (pausar/reanudar/desactivar)
 app.post('/api/hologram/batch-state', async (req, res) => {
   const { state, deviceids, preview = false } = req.body;
   if (!state || !['pause', 'live', 'deactivate'].includes(state)) {
@@ -409,16 +385,10 @@ app.post('/api/hologram/batch-state', async (req, res) => {
     const payload = {
       data: {
         preview: preview,
-        valid_tasks: [
-          {
-            endpoint: "/1/devices/state",
-            params: {
-              state: state,
-              deviceids: deviceids,
-              in_transaction: true
-            }
-          }
-        ]
+        valid_tasks: [{
+          endpoint: "/1/devices/state",
+          params: { state: state, deviceids: deviceids, in_transaction: true }
+        }]
       }
     };
     const result = await hologramRequest('devices/batch/state', 'POST', payload);
@@ -457,9 +427,7 @@ app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
     const usageData = await hologramRequest(`usage/data?deviceid=${deviceIdNum}×tart=${startTimestamp}&timeend=${endTimestamp}`);
     let totalBytes = 0;
     if (usageData.data && Array.isArray(usageData.data)) {
-      for (const record of usageData.data) {
-        totalBytes += record.bytes || 0;
-      }
+      for (const record of usageData.data) totalBytes += record.bytes || 0;
     }
     const totalMB = (totalBytes / (1024 * 1024)).toFixed(3);
     res.json({
@@ -474,7 +442,7 @@ app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
   }
 });
 
-// Reset con espera
+// Reset con espera (pausa + reactivación)
 app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   const { deviceId } = req.params;
   const deviceIdNum = parseInt(deviceId);
@@ -495,6 +463,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   }
 
   try {
+    // Pausar
     const pausePayload = {
       data: {
         preview: false,
@@ -510,6 +479,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
     await waitForJob(jobIdPause);
     console.log(`✅ Dispositivo ${deviceIdNum} pausado`);
 
+    // Reactivar
     const livePayload = {
       data: {
         preview: false,
@@ -533,42 +503,10 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA SIMPLIFICADO (SOLO POR DEVICE ID NUMÉRICO)
-// =========================
-app.get('/api/hologram/search/:value', async (req, res) => {
-  const { value } = req.params;
-  console.log(`🔍 Buscando dispositivo Hologram con valor: ${value}`);
-
-  // Solo aceptar valores numéricos (deviceId)
-  if (!/^\d+$/.test(value)) {
-    return res.json({ ok: false, error: 'Debe ingresar un Device ID numérico (no ICCID). Obtén el Device ID desde el dashboard de Hologram.' });
-  }
-
-  try {
-    const deviceById = await hologramRequest(`devices/${value}`);
-    if (deviceById.data) {
-      return res.json({
-        ok: true,
-        deviceId: deviceById.data.deviceid,
-        iccid: deviceById.data.sim || null,
-        msisdn: deviceById.data.phonenumber,
-        state: deviceById.data.state
-      });
-    } else {
-      res.json({ ok: false, error: 'Device ID no encontrado' });
-    }
-  } catch (error) {
-    console.error('Error en búsqueda Hologram:', error.message);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-// =========================
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
-  console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
-  console.log("✅ Integración con Hologram activa con token actualizado");
-  console.log("✅ Búsqueda de Hologram: solo por Device ID numérico");
+  console.log("🚀 SERVER CON CLARO + HOLOGRAM (sin búsqueda problemática)");
+  console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
+  console.log("✅ Hologram: reset y consumo disponibles usando deviceId numérico");
 });
