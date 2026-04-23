@@ -503,46 +503,65 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA POR ICCID / TELÉFONO (PAGINADO)
+//  ENDPOINT DE BÚSQUEDA MEJORADO (con logs y múltiples campos)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
-  console.log(`🔍 Buscando dispositivo por ICCID/MSISDN: ${value}`);
+  console.log(`🔍 Buscando dispositivo por valor: ${value}`);
 
   try {
     let page = 1;
     let found = null;
     let totalDevicesChecked = 0;
     const limit = 100;
+    let firstDeviceLogged = false;
 
     while (!found) {
       const devicesPage = await hologramRequest(`devices?page=${page}&limit=${limit}`);
       if (!devicesPage.data || devicesPage.data.length === 0) break;
       totalDevicesChecked += devicesPage.data.length;
 
-      // Buscar en los campos 'sim' (ICCID) y 'phonenumber' (MSISDN)
-      found = devicesPage.data.find(d =>
-        d.sim === value ||
-        d.phonenumber === value ||
-        (d.sim && d.sim.trim() === value.trim()) ||
-        (d.phonenumber && d.phonenumber.trim() === value.trim())
-      );
+      // Registrar la estructura del primer dispositivo (solo una vez)
+      if (!firstDeviceLogged && devicesPage.data.length > 0) {
+        console.log("📦 Ejemplo de dispositivo (primer elemento):", JSON.stringify(devicesPage.data[0], null, 2));
+        firstDeviceLogged = true;
+      }
+
+      // Buscar en múltiples campos posibles (ICCID)
+      found = devicesPage.data.find(d => {
+        const possibleFields = ['sim', 'iccid', 'simcardid', 'resource_id', 'sim_id'];
+        return possibleFields.some(field => {
+          const fieldValue = d[field];
+          return fieldValue && String(fieldValue).trim() === String(value).trim();
+        }) || (d.phonenumber && String(d.phonenumber).trim() === String(value).trim());
+      });
+
       if (found) break;
       page++;
     }
 
-    console.log(`📊 Dispositivos revisados: ${totalDevicesChecked}`);
+    console.log(`📊 Total dispositivos revisados: ${totalDevicesChecked}`);
 
     if (found) {
-      console.log(`✅ Encontrado: deviceId=${found.deviceid}, sim=${found.sim}, phonenumber=${found.phonenumber}, state=${found.state}`);
+      // Determinar cuál campo contiene el ICCID
+      let iccidValue = null;
+      const possibleFields = ['sim', 'iccid', 'simcardid', 'resource_id', 'sim_id'];
+      for (const field of possibleFields) {
+        if (found[field]) {
+          iccidValue = found[field];
+          break;
+        }
+      }
+      console.log(`✅ Encontrado: deviceId=${found.deviceid}, ICCID=${iccidValue}, MSISDN=${found.phonenumber}, state=${found.state}`);
       res.json({
         ok: true,
         deviceId: found.deviceid,
-        iccid: found.sim,
+        iccid: iccidValue,
         msisdn: found.phonenumber,
         state: found.state
       });
     } else {
+      console.log(`❌ No se encontró ningún dispositivo con el valor: ${value}`);
       res.status(404).json({ ok: false, error: 'No se encontró ningún dispositivo con ese ICCID o número de teléfono.' });
     }
   } catch (error) {
@@ -555,7 +574,7 @@ app.get('/api/hologram/search/:value', async (req, res) => {
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CLARO + HOLOGRAM (incluye búsqueda)");
+  console.log("🚀 SERVER CON CLARO + HOLOGRAM (búsqueda mejorada con logs)");
   console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
   console.log("✅ Hologram: búsqueda, reset y consumo disponibles");
 });
