@@ -499,41 +499,55 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   }
 });
 
-// ---------- BÚSQUEDA POR DEVICE ID (endpoint oficial) ----------
-// Usa el endpoint GET /api/1/devices/{deviceId} de Hologram
-app.get('/api/hologram/search/:deviceId', async (req, res) => {
-  const { deviceId } = req.params;
-  console.log(`🔍 Obteniendo información del dispositivo Hologram con Device ID: ${deviceId}`);
+// ======================================================================
+//  BÚSQUEDA DE DISPOSITIVO HOLOGRAM POR ICCID (usando POST /devices/search)
+// ======================================================================
+app.get('/api/hologram/search/:iccid', async (req, res) => {
+  const { iccid } = req.params;
+  console.log(`🔍 Buscando dispositivo por ICCID: ${iccid}`);
 
-  const deviceIdNum = parseInt(deviceId);
-  if (isNaN(deviceIdNum)) {
-    return res.status(400).json({ ok: false, error: 'Debe ingresar un Device ID numérico válido.' });
+  // Validación básica del ICCID (debe ser un número de al menos 18 dígitos)
+  if (!/^\d{18,20}$/.test(iccid)) {
+    return res.status(400).json({ ok: false, error: 'ICCID inválido. Debe contener entre 18 y 20 dígitos numéricos.' });
   }
 
-  try {
-    const deviceData = await hologramRequest(`devices/${deviceIdNum}`);
-    if (deviceData && deviceData.data) {
-      const device = deviceData.data;
-      // Extraer ICCID del perfil activo si está disponible
-      let iccid = null;
-      if (device.links && device.links.cellular && device.links.cellular[0] && device.links.cellular[0].sim) {
-        iccid = device.links.cellular[0].sim;
+  const searchDevicesByIccid = async (iccidToSearch) => {
+    const filters = {
+      filters: [{ field: "active_iccid", operator: "eq", value: iccidToSearch }], // Filtra por ICCID activo
+      hitsPerPage: 5
+    };
+    try {
+      const result = await hologramRequest('devices/search', 'POST', filters);
+      // 'result.hits' contiene los dispositivos coincidentes
+      if (result && result.hits && result.hits.length > 0) {
+        return result.hits[0];
       }
-      console.log(`✅ Dispositivo encontrado: ${device.id} - Estado: ${device.state}`);
+      return null;
+    } catch (error) {
+      console.error('Error interno al buscar por ICCID:', error.message);
+      throw error;
+    }
+  };
+
+  try {
+    const device = await searchDevicesByIccid(iccid);
+    if (device) {
+      console.log(`✅ Dispositivo encontrado: ID=${device.id}, Estado=${device.active_link_state}, ICCID=${device.active_iccid}`);
       res.json({
         ok: true,
         deviceId: device.id,
         name: device.name,
-        msisdn: device.phonenumber,
-        state: device.state,
+        iccid: device.active_iccid,
+        state: device.active_link_state,
+        phonenumber: device.phonenumber,
         imei: device.imei,
-        iccid: iccid
+        plan: device.plan_name
       });
     } else {
-      res.status(404).json({ ok: false, error: 'Dispositivo no encontrado con el Device ID proporcionado.' });
+      res.status(404).json({ ok: false, error: 'Dispositivo no encontrado para el ICCID proporcionado.' });
     }
   } catch (error) {
-    console.error('Error al consultar dispositivo por ID:', error.message);
+    console.error('Error en la búsqueda por ICCID:', error.message);
     res.status(500).json({ ok: false, error: error.message });
   }
 });
@@ -549,5 +563,5 @@ app.listen(PORT, () => {
   console.log(`   Claro: /api/device/full/:value, /api/device/reset/:value (y /api2, /api3)`);
   console.log(`   Hologram: /api/hologram/health, /api/hologram/batch-state`);
   console.log(`   Hologram: /api/hologram/device/:deviceId/usage, /api/hologram/device/:deviceId/reset`);
-  console.log(`   Hologram: /api/hologram/search/:deviceId (buscar por ID numérico)`);
+  console.log(`   Hologram: /api/hologram/search/:iccid  (buscar por ICCID)`);
 });
