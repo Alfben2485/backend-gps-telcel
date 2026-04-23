@@ -499,7 +499,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 // ======================================================================
 //  BÚSQUEDA POR ICCID - VERSIÓN DEFINITIVA (auto-adaptable con paginación)
 // ======================================================================
-app.get('/api/hologram/search/:iccid', async (req, res) => {
+app.get('/api/1/device/:sim', async (req, res) => {
   const { iccid } = req.params;
   console.log(`🔍 Buscando dispositivo por ICCID: ${iccid}`);
 
