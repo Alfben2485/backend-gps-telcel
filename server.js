@@ -362,7 +362,95 @@ async function hologramRequest(endpoint, method = 'GET', body = null) {
   }
 }
 
-// Health Check
+// ---------- CACHE DE DISPOSITIVOS HOLOGRAM (para búsqueda por ICCID/MSISDN) ----------
+let deviceCache = {
+  iccidMap: new Map(),   // ICCID -> device object
+  msisdnMap: new Map(),  // MSISDN -> device object
+  lastUpdate: 0,
+  updating: false
+};
+
+async function refreshDeviceCache() {
+  if (deviceCache.updating) return;
+  deviceCache.updating = true;
+  console.log("🔄 Actualizando caché de dispositivos Hologram...");
+  try {
+    let page = 1;
+    let allDevices = [];
+    let totalDevices = 0;
+    const limit = 100;
+    while (true) {
+      const res = await hologramRequest(`devices?page=${page}&limit=${limit}`);
+      if (!res.data || res.data.length === 0) break;
+      allDevices.push(...res.data);
+      totalDevices += res.data.length;
+      if (res.data.length < limit) break;
+      page++;
+    }
+    deviceCache.iccidMap.clear();
+    deviceCache.msisdnMap.clear();
+    for (const device of allDevices) {
+      const iccid = device.sim || device.iccid || null;
+      if (iccid) {
+        deviceCache.iccidMap.set(iccid, device);
+      }
+      const msisdn = device.phonenumber;
+      if (msisdn) {
+        deviceCache.msisdnMap.set(msisdn, device);
+      }
+    }
+    deviceCache.lastUpdate = Date.now();
+    console.log(`✅ Caché actualizada: ${totalDevices} dispositivos cargados. ICCIDs: ${deviceCache.iccidMap.size}, MSISDNs: ${deviceCache.msisdnMap.size}`);
+  } catch (error) {
+    console.error("Error refrescando caché de Hologram:", error.message);
+  } finally {
+    deviceCache.updating = false;
+  }
+}
+
+setInterval(() => {
+  refreshDeviceCache();
+}, 60 * 60 * 1000);
+
+refreshDeviceCache();
+
+app.get('/api/hologram/search/:value', async (req, res) => {
+  const { value } = req.params;
+  console.log(`🔍 Buscando dispositivo por valor: ${value}`);
+  try {
+    while (deviceCache.updating) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+    let device = deviceCache.iccidMap.get(value);
+    if (!device) {
+      const cleanValue = value.replace(/\D/g, '');
+      for (let [msisdn, dev] of deviceCache.msisdnMap.entries()) {
+        if (msisdn.replace(/\D/g, '') === cleanValue) {
+          device = dev;
+          break;
+        }
+      }
+    }
+    if (device) {
+      const iccid = device.sim || device.iccid || null;
+      console.log(`✅ Encontrado: deviceId=${device.deviceid}, ICCID=${iccid}, MSISDN=${device.phonenumber}, state=${device.state}`);
+      res.json({
+        ok: true,
+        deviceId: device.deviceid,
+        iccid: iccid,
+        msisdn: device.phonenumber,
+        state: device.state
+      });
+    } else {
+      console.log(`❌ No encontrado en caché: ${value}`);
+      res.status(404).json({ ok: false, error: 'Dispositivo no encontrado. Verifica el ICCID o número de teléfono.' });
+    }
+  } catch (error) {
+    console.error("Error en búsqueda:", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('/api/hologram/health', async (req, res) => {
   try {
     await hologramRequest('users/me');
@@ -372,7 +460,6 @@ app.get('/api/hologram/health', async (req, res) => {
   }
 });
 
-// Estado masivo
 app.post('/api/hologram/batch-state', async (req, res) => {
   const { state, deviceids, preview = false } = req.body;
   if (!state || !['pause', 'live', 'deactivate'].includes(state)) {
@@ -398,7 +485,6 @@ app.post('/api/hologram/batch-state', async (req, res) => {
   }
 });
 
-// Consulta de uso de datos
 app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
   const { deviceId } = req.params;
   let { startDate, endDate } = req.query;
@@ -442,7 +528,6 @@ app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
   }
 });
 
-// Reset con espera (pausa + reactivación)
 app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   const { deviceId } = req.params;
   const deviceIdNum = parseInt(deviceId);
@@ -500,100 +585,8 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   }
 });
 
-// =========================
-//  ENDPOINT DE BÚSQUEDA ROBUSTO (con paginación y múltiples campos)
-// =========================
-app.get('/api/hologram/search/:value', async (req, res) => {
-  const { value } = req.params;
-  console.log(`🔍 Buscando dispositivo por valor: ${value}`);
-
-  try {
-    // Intento 1: búsqueda directa por sim
-    try {
-      const resSim = await hologramRequest(`devices?sim=${encodeURIComponent(value)}`);
-      if (resSim.data && resSim.data.length > 0) {
-        const device = resSim.data[0];
-        return res.json({
-          ok: true,
-          deviceId: device.deviceid,
-          iccid: device.sim,
-          msisdn: device.phonenumber,
-          state: device.state
-        });
-      }
-    } catch (e) { /* no encontrado */ }
-
-    // Intento 2: búsqueda por número de teléfono
-    try {
-      const resPhone = await hologramRequest(`devices?phonenumber=${encodeURIComponent(value)}`);
-      if (resPhone.data && resPhone.data.length > 0) {
-        const device = resPhone.data[0];
-        return res.json({
-          ok: true,
-          deviceId: device.deviceid,
-          iccid: device.sim,
-          msisdn: device.phonenumber,
-          state: device.state
-        });
-      }
-    } catch (e) { /* no encontrado */ }
-
-    // Intento 3: paginación completa
-    let page = 1;
-    let found = null;
-    let totalDevicesChecked = 0;
-    const limit = 100;
-    let firstDeviceLogged = false;
-
-    while (!found) {
-      const devicesPage = await hologramRequest(`devices?page=${page}&limit=${limit}`);
-      if (!devicesPage.data || devicesPage.data.length === 0) break;
-      totalDevicesChecked += devicesPage.data.length;
-
-      if (!firstDeviceLogged && devicesPage.data.length > 0) {
-        console.log("📦 Ejemplo de dispositivo (primer elemento):", JSON.stringify(devicesPage.data[0], null, 2));
-        firstDeviceLogged = true;
-      }
-
-      found = devicesPage.data.find(d => {
-        const fields = ['sim', 'iccid', 'simcardid', 'resource_id', 'phonenumber'];
-        return fields.some(field => {
-          const val = d[field];
-          return val && String(val).trim() === String(value).trim();
-        }) || (d.deviceid && String(d.deviceid) === value);
-      });
-
-      if (found) break;
-      page++;
-    }
-
-    console.log(`📊 Dispositivos revisados: ${totalDevicesChecked}`);
-
-    if (found) {
-      let iccidValue = found.sim || found.iccid || found.simcardid || null;
-      console.log(`✅ Encontrado: deviceId=${found.deviceid}, ICCID=${iccidValue}, MSISDN=${found.phonenumber}, state=${found.state}`);
-      res.json({
-        ok: true,
-        deviceId: found.deviceid,
-        iccid: iccidValue,
-        msisdn: found.phonenumber,
-        state: found.state
-      });
-    } else {
-      console.log(`❌ No se encontró ningún dispositivo con el valor: ${value}`);
-      res.status(404).json({ ok: false, error: 'No se encontró ningún dispositivo con ese ICCID o número de teléfono.' });
-    }
-  } catch (error) {
-    console.error('Error en búsqueda Hologram:', error.message);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-// =========================
-//  START
-// =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CLARO + HOLOGRAM (búsqueda robusta con paginación)");
+  console.log("🚀 SERVER CON CLARO + HOLOGRAM (caché de dispositivos)");
   console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
-  console.log("✅ Hologram: búsqueda, reset y consumo disponibles");
+  console.log("✅ Hologram: búsqueda por caché local, reset y consumo disponibles");
 });
