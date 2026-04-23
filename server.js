@@ -533,14 +533,14 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA CORREGIDO (PAGINACIÓN MANUAL)
+//  ENDPOINT DE BÚSQUEDA CORREGIDO (PAGINACIÓN + INSPECCIÓN DE CAMPOS)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
   console.log(`🔍 Buscando dispositivo Hologram con valor: ${value}`);
 
   try {
-    // 1. Si el valor es numérico, intentar como deviceId directo
+    // 1. Búsqueda directa por deviceId si es numérico
     if (/^\d+$/.test(value)) {
       try {
         const deviceById = await hologramRequest(`devices/${value}`);
@@ -549,36 +549,56 @@ app.get('/api/hologram/search/:value', async (req, res) => {
           return res.json({
             ok: true,
             deviceId: deviceById.data.deviceid,
-            iccid: deviceById.data.sim,
+            iccid: deviceById.data.sim || deviceById.data.iccid || null,
             msisdn: deviceById.data.phonenumber,
             state: deviceById.data.state
           });
         }
       } catch (err) {
-        // No encontrado por deviceId, continuar
+        // No encontrado, continuar
       }
     }
 
-    // 2. Búsqueda paginada por ICCID (campo "sim") o MSISDN (campo "phonenumber")
+    // 2. Búsqueda paginada con inspección de campos
     let page = 1;
     let found = null;
+    let totalDevicesChecked = 0;
+    const limit = 200;
+
     while (!found) {
-      const devicesPage = await hologramRequest(`devices?page=${page}&limit=100`);
+      const devicesPage = await hologramRequest(`devices?page=${page}&limit=${limit}`);
       if (!devicesPage.data || devicesPage.data.length === 0) break;
 
-      found = devicesPage.data.find(d =>
-        d.sim === value || d.phonenumber === value
-      );
+      // Log del primer dispositivo (solo primera página)
+      if (page === 1 && devicesPage.data.length > 0) {
+        console.log("📦 Ejemplo de dispositivo (primer elemento):", JSON.stringify(devicesPage.data[0], null, 2));
+      }
+
+      found = devicesPage.data.find(d => {
+        totalDevicesChecked++;
+        return (
+          d.sim === value ||
+          d.iccid === value ||
+          d.simcardid === value ||
+          d.sim_id === value ||
+          d.resource_id === value ||
+          d.phonenumber === value ||
+          (d.deviceid && d.deviceid.toString() === value)
+        );
+      });
+
       if (found) break;
       page++;
     }
 
+    console.log(`📊 Total dispositivos revisados: ${totalDevicesChecked}`);
+
     if (found) {
-      console.log(`✅ Encontrado por paginación: deviceId=${found.deviceid}, sim=${found.sim}, phonenumber=${found.phonenumber}`);
+      console.log(`✅ Encontrado por paginación en página ${page}: deviceId=${found.deviceid}, sim=${found.sim}, iccid=${found.iccid}, phonenumber=${found.phonenumber}`);
       return res.json({
         ok: true,
         deviceId: found.deviceid,
-        iccid: found.sim,
+        iccid: found.sim || found.iccid || found.simcardid || null,
         msisdn: found.phonenumber,
         state: found.state
       });
@@ -599,5 +619,5 @@ app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("✅ Integración con Hologram activa con token actualizado");
-  console.log("✅ Endpoint de búsqueda mejorado con paginación manual");
+  console.log("✅ Endpoint de búsqueda mejorado con paginación e inspección");
 });
