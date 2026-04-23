@@ -503,62 +503,38 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA MEJORADO (con logs y múltiples campos)
+//  ENDPOINT DE BÚSQUEDA USANDO POST /devices/search (método correcto)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
   console.log(`🔍 Buscando dispositivo por valor: ${value}`);
 
   try {
-    let page = 1;
-    let found = null;
-    let totalDevicesChecked = 0;
-    const limit = 100;
-    let firstDeviceLogged = false;
-
-    while (!found) {
-      const devicesPage = await hologramRequest(`devices?page=${page}&limit=${limit}`);
-      if (!devicesPage.data || devicesPage.data.length === 0) break;
-      totalDevicesChecked += devicesPage.data.length;
-
-      // Registrar la estructura del primer dispositivo (solo una vez)
-      if (!firstDeviceLogged && devicesPage.data.length > 0) {
-        console.log("📦 Ejemplo de dispositivo (primer elemento):", JSON.stringify(devicesPage.data[0], null, 2));
-        firstDeviceLogged = true;
+    // Usar el endpoint POST /devices/search con filtro
+    const searchResult = await hologramRequest('devices/search', 'POST', {
+      filters: {
+        // Intentar buscar en varios campos comunes
+        sim: value,
+        phonenumber: value,
+        deviceid: /^\d+$/.test(value) ? parseInt(value) : undefined
       }
+    });
 
-      // Buscar en múltiples campos posibles (ICCID)
-      found = devicesPage.data.find(d => {
-        const possibleFields = ['sim', 'iccid', 'simcardid', 'resource_id', 'sim_id'];
-        return possibleFields.some(field => {
-          const fieldValue = d[field];
-          return fieldValue && String(fieldValue).trim() === String(value).trim();
-        }) || (d.phonenumber && String(d.phonenumber).trim() === String(value).trim());
-      });
+    console.log("📦 Respuesta de búsqueda:", JSON.stringify(searchResult, null, 2));
 
-      if (found) break;
-      page++;
-    }
-
-    console.log(`📊 Total dispositivos revisados: ${totalDevicesChecked}`);
-
-    if (found) {
-      // Determinar cuál campo contiene el ICCID
-      let iccidValue = null;
-      const possibleFields = ['sim', 'iccid', 'simcardid', 'resource_id', 'sim_id'];
-      for (const field of possibleFields) {
-        if (found[field]) {
-          iccidValue = found[field];
-          break;
-        }
-      }
-      console.log(`✅ Encontrado: deviceId=${found.deviceid}, ICCID=${iccidValue}, MSISDN=${found.phonenumber}, state=${found.state}`);
+    // La respuesta puede tener una propiedad 'data' con un array de dispositivos
+    const devices = searchResult.data || [];
+    if (devices.length > 0) {
+      const device = devices[0];
+      // Determinar el ICCID (puede estar en 'sim' u otro campo)
+      const iccid = device.sim || device.iccid || null;
+      console.log(`✅ Encontrado: deviceId=${device.deviceid}, ICCID=${iccid}, MSISDN=${device.phonenumber}, state=${device.state}`);
       res.json({
         ok: true,
-        deviceId: found.deviceid,
-        iccid: iccidValue,
-        msisdn: found.phonenumber,
-        state: found.state
+        deviceId: device.deviceid,
+        iccid: iccid,
+        msisdn: device.phonenumber,
+        state: device.state
       });
     } else {
       console.log(`❌ No se encontró ningún dispositivo con el valor: ${value}`);
@@ -574,7 +550,7 @@ app.get('/api/hologram/search/:value', async (req, res) => {
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CLARO + HOLOGRAM (búsqueda mejorada con logs)");
+  console.log("🚀 SERVER CON CLARO + HOLOGRAM (búsqueda con POST /devices/search)");
   console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
   console.log("✅ Hologram: búsqueda, reset y consumo disponibles");
 });
