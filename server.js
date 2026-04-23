@@ -15,7 +15,7 @@ const agent = new https.Agent({
 const BASE_URL = "https://cc.amx.claroconnect.com:8443";
 
 // =========================
-//  CUENTA ORIGINAL
+//  CUENTA ORIGINAL (CLARO)
 // =========================
 const USERNAME = "alfben";
 const PASSWORD = "Soporte122@";
@@ -24,7 +24,7 @@ let TOKEN = null;
 let TOKEN_TIME = 0;
 
 // =========================
-//  CUENTAS EXTRA
+//  CUENTAS EXTRA (CLARO)
 // =========================
 const ACCOUNTS_EXTRA = {
   cuenta2: {
@@ -56,7 +56,7 @@ async function getToken() {
 
   TOKEN = r.data?.token;
   TOKEN_TIME = Date.now();
-  console.log("🔑 Token actualizado");
+  console.log("🔑 Token Claro actualizado");
 }
 
 async function ensureToken() {
@@ -65,9 +65,6 @@ async function ensureToken() {
   }
 }
 
-// =========================
-//  TOKEN EXTRA
-// =========================
 async function ensureTokenExtra(key) {
   const acc = ACCOUNTS_EXTRA[key];
 
@@ -89,7 +86,7 @@ async function ensureTokenExtra(key) {
 }
 
 // =========================
-//  REQUEST
+//  REQUEST (CLARO)
 // =========================
 async function claroRequest(config) {
   await ensureToken();
@@ -120,7 +117,7 @@ async function claroRequestExtra(key, config) {
 }
 
 // =========================
-//  FUNCIONES GENERALES
+//  FUNCIONES GENERALES (CLARO)
 // =========================
 function extractIMSI(item) {
   return (
@@ -133,20 +130,19 @@ function extractIMSI(item) {
 }
 
 // =========================
-//  CACHE (2 minutos)
+//  CACHE PARA CONSUMO CLARO
 // =========================
 const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
-//  FACTOR DE CORRECCIÓN GLOBAL
+//  FACTOR DE CORRECCIÓN GLOBAL (CLARO)
 // =========================
 const FACTOR_GLOBAL = 1.902;
-
 const FACTORES_POR_ICCID = {};
 
 // =========================
-//  CONSUMO DÍA POR DÍA + FACTOR
+//  CONSUMO DÍA POR DÍA + FACTOR (CLARO)
 // =========================
 async function fetchUsage(request, imsi, iccid) {
   if (!imsi) return { consumoMB: 0 };
@@ -160,6 +156,7 @@ async function fetchUsage(request, imsi, iccid) {
   const now = new Date();
   let start, end;
 
+  // Ciclo de facturación: 27 → 25
   if (now.getDate() >= 27) {
     start = new Date(now.getFullYear(), now.getMonth(), 27);
     end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
@@ -203,6 +200,7 @@ async function fetchUsage(request, imsi, iccid) {
     }
   }
 
+  // Session History
   try {
     const sessionRes = await request({
       method: "post",
@@ -214,7 +212,9 @@ async function fetchUsage(request, imsi, iccid) {
     for (const s of sessions) {
       sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
     }
-    if (sessionMB > 0) totalMB += sessionMB;
+    if (sessionMB > 0) {
+      totalMB += sessionMB;
+    }
   } catch (err) {
     console.log("⚠️ sessionHistory falló");
   }
@@ -223,7 +223,7 @@ async function fetchUsage(request, imsi, iccid) {
   const consumoFinal = totalMB * factor;
   const rounded = Number(consumoFinal.toFixed(3));
 
-  console.log(`📊 Consumo base API: ${totalMB.toFixed(3)} MB → Factor ${factor} → Consumo final: ${rounded} MB`);
+  console.log(`📊 Consumo Claro: base ${totalMB.toFixed(3)} MB → factor ${factor} → final ${rounded} MB`);
 
   const result = { consumoMB: rounded };
   usageCache.set(imsi, { time: Date.now(), data: result });
@@ -231,7 +231,7 @@ async function fetchUsage(request, imsi, iccid) {
 }
 
 // =========================
-//  CORE
+//  CORE CLARO
 // =========================
 async function fetchSim(request, value) {
   const r = await request({
@@ -268,9 +268,6 @@ async function getTotalSims(request) {
   return r.data?.recordsFiltered || 0;
 }
 
-// =========================
-//  ENDPOINTS CLARO
-// =========================
 function buildEndpoint(path, requestFn) {
   app.get(path, async (req, res) => {
     const timeout = setTimeout(() => res.json({ ok: false, error: "Timeout" }), 25000);
@@ -298,7 +295,7 @@ function buildEndpoint(path, requestFn) {
       });
     } catch (error) {
       clearTimeout(timeout);
-      console.error("Error en endpoint:", error.message);
+      console.error("Error en endpoint Claro:", error.message);
       res.json({ ok: false, error: error.message });
     }
   });
@@ -318,7 +315,7 @@ function buildReset(path, requestFn) {
       });
       res.json({ ok: true, data: r.data });
     } catch (error) {
-      console.error("Error en reset:", error.message);
+      console.error("Error reset Claro:", error.message);
       res.json({ ok: false, error: error.message });
     }
   });
@@ -333,7 +330,7 @@ buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cf
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
 
 // =========================
-//  INTEGRACIÓN CON HOLOGRAM (SOLO ENDPOINTS FUNCIONALES)
+//  INTEGRACIÓN CON HOLOGRAM
 // =========================
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
@@ -362,7 +359,7 @@ async function hologramRequest(endpoint, method = 'GET', body = null) {
   }
 }
 
-// Health Check
+// ---------- Health Check ----------
 app.get('/api/hologram/health', async (req, res) => {
   try {
     await hologramRequest('users/me');
@@ -372,7 +369,7 @@ app.get('/api/hologram/health', async (req, res) => {
   }
 });
 
-// Estado masivo
+// ---------- Estado masivo (batch) ----------
 app.post('/api/hologram/batch-state', async (req, res) => {
   const { state, deviceids, preview = false } = req.body;
   if (!state || !['pause', 'live', 'deactivate'].includes(state)) {
@@ -398,7 +395,7 @@ app.post('/api/hologram/batch-state', async (req, res) => {
   }
 });
 
-// Consulta de uso de datos
+// ---------- Consulta de uso de datos ----------
 app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
   const { deviceId } = req.params;
   let { startDate, endDate } = req.query;
@@ -442,7 +439,7 @@ app.get('/api/hologram/device/:deviceId/usage', async (req, res) => {
   }
 });
 
-// Reset con espera (pausa + reactivación)
+// ---------- Reset con espera (pausa + reactivación) ----------
 app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   const { deviceId } = req.params;
   const deviceIdNum = parseInt(deviceId);
@@ -463,6 +460,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   }
 
   try {
+    // Pausar
     const pausePayload = {
       data: {
         preview: false,
@@ -478,6 +476,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
     await waitForJob(jobIdPause);
     console.log(`✅ Dispositivo ${deviceIdNum} pausado`);
 
+    // Reactivar
     const livePayload = {
       data: {
         preview: false,
@@ -500,11 +499,55 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   }
 });
 
+// ---------- BÚSQUEDA POR DEVICE ID (endpoint oficial) ----------
+// Usa el endpoint GET /api/1/devices/{deviceId} de Hologram
+app.get('/api/hologram/search/:deviceId', async (req, res) => {
+  const { deviceId } = req.params;
+  console.log(`🔍 Obteniendo información del dispositivo Hologram con Device ID: ${deviceId}`);
+
+  const deviceIdNum = parseInt(deviceId);
+  if (isNaN(deviceIdNum)) {
+    return res.status(400).json({ ok: false, error: 'Debe ingresar un Device ID numérico válido.' });
+  }
+
+  try {
+    const deviceData = await hologramRequest(`devices/${deviceIdNum}`);
+    if (deviceData && deviceData.data) {
+      const device = deviceData.data;
+      // Extraer ICCID del perfil activo si está disponible
+      let iccid = null;
+      if (device.links && device.links.cellular && device.links.cellular[0] && device.links.cellular[0].sim) {
+        iccid = device.links.cellular[0].sim;
+      }
+      console.log(`✅ Dispositivo encontrado: ${device.id} - Estado: ${device.state}`);
+      res.json({
+        ok: true,
+        deviceId: device.id,
+        name: device.name,
+        msisdn: device.phonenumber,
+        state: device.state,
+        imei: device.imei,
+        iccid: iccid
+      });
+    } else {
+      res.status(404).json({ ok: false, error: 'Dispositivo no encontrado con el Device ID proporcionado.' });
+    }
+  } catch (error) {
+    console.error('Error al consultar dispositivo por ID:', error.message);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // =========================
-//  START
+//  INICIO DEL SERVIDOR
 // =========================
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CLARO + HOLOGRAM (solo endpoints funcionales)");
-  console.log("✅ Hologram: reset, consumo y batch-state disponibles usando deviceId numérico");
-  console.log("⚠️ No hay búsqueda por ICCID. Usa el deviceId directamente.");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
+  console.log(`✅ Endpoints disponibles:`);
+  console.log(`   Claro: /api/device/full/:value, /api/device/reset/:value (y /api2, /api3)`);
+  console.log(`   Hologram: /api/hologram/health, /api/hologram/batch-state`);
+  console.log(`   Hologram: /api/hologram/device/:deviceId/usage, /api/hologram/device/:deviceId/reset`);
+  console.log(`   Hologram: /api/hologram/search/:deviceId (buscar por ID numérico)`);
 });
