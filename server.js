@@ -333,7 +333,7 @@ buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cf
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
 
 // =========================
-//  INTEGRACIÓN CON HOLOGRAM (SIN BÚSQUEDA, SOLO RESET Y CONSUMO)
+//  INTEGRACIÓN CON HOLOGRAM
 // =========================
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
@@ -372,7 +372,7 @@ app.get('/api/hologram/health', async (req, res) => {
   }
 });
 
-// Estado masivo (pausar/reanudar/desactivar)
+// Estado masivo
 app.post('/api/hologram/batch-state', async (req, res) => {
   const { state, deviceids, preview = false } = req.body;
   if (!state || !['pause', 'live', 'deactivate'].includes(state)) {
@@ -503,10 +503,59 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
+//  ENDPOINT DE BÚSQUEDA POR ICCID / TELÉFONO (PAGINADO)
+// =========================
+app.get('/api/hologram/search/:value', async (req, res) => {
+  const { value } = req.params;
+  console.log(`🔍 Buscando dispositivo por ICCID/MSISDN: ${value}`);
+
+  try {
+    let page = 1;
+    let found = null;
+    let totalDevicesChecked = 0;
+    const limit = 100;
+
+    while (!found) {
+      const devicesPage = await hologramRequest(`devices?page=${page}&limit=${limit}`);
+      if (!devicesPage.data || devicesPage.data.length === 0) break;
+      totalDevicesChecked += devicesPage.data.length;
+
+      // Buscar en los campos 'sim' (ICCID) y 'phonenumber' (MSISDN)
+      found = devicesPage.data.find(d =>
+        d.sim === value ||
+        d.phonenumber === value ||
+        (d.sim && d.sim.trim() === value.trim()) ||
+        (d.phonenumber && d.phonenumber.trim() === value.trim())
+      );
+      if (found) break;
+      page++;
+    }
+
+    console.log(`📊 Dispositivos revisados: ${totalDevicesChecked}`);
+
+    if (found) {
+      console.log(`✅ Encontrado: deviceId=${found.deviceid}, sim=${found.sim}, phonenumber=${found.phonenumber}, state=${found.state}`);
+      res.json({
+        ok: true,
+        deviceId: found.deviceid,
+        iccid: found.sim,
+        msisdn: found.phonenumber,
+        state: found.state
+      });
+    } else {
+      res.status(404).json({ ok: false, error: 'No se encontró ningún dispositivo con ese ICCID o número de teléfono.' });
+    }
+  } catch (error) {
+    console.error('Error en búsqueda Hologram:', error.message);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// =========================
 //  START
 // =========================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 SERVER CON CLARO + HOLOGRAM (sin búsqueda problemática)");
+  console.log("🚀 SERVER CON CLARO + HOLOGRAM (incluye búsqueda)");
   console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
-  console.log("✅ Hologram: reset y consumo disponibles usando deviceId numérico");
+  console.log("✅ Hologram: búsqueda, reset y consumo disponibles");
 });
