@@ -533,17 +533,16 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
 });
 
 // =========================
-//  ENDPOINT DE BÚSQUEDA CORREGIDO (usa filtros directos y logs)
+//  ENDPOINT DE BÚSQUEDA CORREGIDO (PAGINACIÓN MANUAL)
 // =========================
 app.get('/api/hologram/search/:value', async (req, res) => {
   const { value } = req.params;
   console.log(`🔍 Buscando dispositivo Hologram con valor: ${value}`);
 
   try {
-    // 1. Si el valor es numérico, probar como deviceId
+    // 1. Si el valor es numérico, intentar como deviceId directo
     if (/^\d+$/.test(value)) {
       try {
-        console.log(`Intentando búsqueda por deviceId: ${value}`);
         const deviceById = await hologramRequest(`devices/${value}`);
         if (deviceById.data) {
           console.log(`✅ Encontrado por deviceId: ${deviceById.data.deviceid}`);
@@ -556,66 +555,26 @@ app.get('/api/hologram/search/:value', async (req, res) => {
           });
         }
       } catch (err) {
-        console.log(`No encontrado por deviceId: ${err.message}`);
+        // No encontrado por deviceId, continuar
       }
     }
 
-    // 2. Búsqueda por ICCID (sim) usando filtro
-    // La API permite: /devices?sim=xxxxxxxxx
-    console.log(`Intentando búsqueda por ICCID (sim): ${value}`);
-    try {
-      const devicesBySim = await hologramRequest(`devices?sim=${encodeURIComponent(value)}`);
-      if (devicesBySim.data && devicesBySim.data.length > 0) {
-        const device = devicesBySim.data[0];
-        console.log(`✅ Encontrado por ICCID: ${device.deviceid}`);
-        return res.json({
-          ok: true,
-          deviceId: device.deviceid,
-          iccid: device.sim,
-          msisdn: device.phonenumber,
-          state: device.state
-        });
-      } else {
-        console.log(`No se encontraron dispositivos con sim=${value}`);
-      }
-    } catch (err) {
-      console.log(`Error en búsqueda por sim: ${err.message}`);
-    }
-
-    // 3. Búsqueda por número de teléfono (phonenumber)
-    console.log(`Intentando búsqueda por MSISDN (phonenumber): ${value}`);
-    try {
-      const devicesByPhone = await hologramRequest(`devices?phonenumber=${encodeURIComponent(value)}`);
-      if (devicesByPhone.data && devicesByPhone.data.length > 0) {
-        const device = devicesByPhone.data[0];
-        console.log(`✅ Encontrado por MSISDN: ${device.deviceid}`);
-        return res.json({
-          ok: true,
-          deviceId: device.deviceid,
-          iccid: device.sim,
-          msisdn: device.phonenumber,
-          state: device.state
-        });
-      } else {
-        console.log(`No se encontraron dispositivos con phonenumber=${value}`);
-      }
-    } catch (err) {
-      console.log(`Error en búsqueda por phonenumber: ${err.message}`);
-    }
-
-    // 4. Como último recurso, recorrer páginas (si hay muchos dispositivos y los filtros no funcionan)
-    console.log(`Iniciando búsqueda paginada...`);
+    // 2. Búsqueda paginada por ICCID (campo "sim") o MSISDN (campo "phonenumber")
     let page = 1;
     let found = null;
     while (!found) {
       const devicesPage = await hologramRequest(`devices?page=${page}&limit=100`);
       if (!devicesPage.data || devicesPage.data.length === 0) break;
-      found = devicesPage.data.find(d => d.sim === value || d.phonenumber === value);
+
+      found = devicesPage.data.find(d =>
+        d.sim === value || d.phonenumber === value
+      );
       if (found) break;
       page++;
     }
+
     if (found) {
-      console.log(`✅ Encontrado por paginación: ${found.deviceid}`);
+      console.log(`✅ Encontrado por paginación: deviceId=${found.deviceid}, sim=${found.sim}, phonenumber=${found.phonenumber}`);
       return res.json({
         ok: true,
         deviceId: found.deviceid,
@@ -640,5 +599,5 @@ app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL Y HOLOGRAM INTEGRADO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
   console.log("✅ Integración con Hologram activa con token actualizado");
-  console.log("✅ Endpoint de búsqueda mejorado con logs y filtros directos");
+  console.log("✅ Endpoint de búsqueda mejorado con paginación manual");
 });
