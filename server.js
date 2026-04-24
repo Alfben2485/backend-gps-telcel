@@ -155,7 +155,6 @@ async function hologramRequest(endpoint, method = 'GET', body = null) {
   };
   if (body) config.data = body;
   const response = await axios(config);
-  // La API puede devolver success:true o directamente data en raíz
   if (response.data && (response.data.success === true || response.data.data !== undefined)) return response.data;
   console.error(`Respuesta de Hologram (${endpoint}):`, JSON.stringify(response.data, null, 2));
   throw new Error(response.data?.error || response.data?.message || 'Error desconocido en la API de Hologram');
@@ -164,6 +163,31 @@ async function hologramRequest(endpoint, method = 'GET', body = null) {
 // Health Check
 app.get('/api/hologram/health', async (req, res) => {
   try { await hologramRequest('users/me'); res.json({ ok: true }); } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Endpoint temporal: listar todos los dispositivos (para depuración)
+app.get('/api/hologram/list-all-devices', async (req, res) => {
+  try {
+    let page = 1;
+    let allDevices = [];
+    const limit = 100;
+    while (true) {
+      const response = await hologramRequest(`devices?page=${page}&limit=${limit}`);
+      if (!response.data || response.data.length === 0) break;
+      allDevices.push(...response.data);
+      if (response.data.length < limit) break;
+      page++;
+    }
+    const devicesMap = allDevices.map(d => ({
+      deviceId: d.id,
+      iccid: d.sim || d.iccid || d.active_iccid || d.enabled_iccid || 'NO_ICCID',
+      name: d.name,
+      state: d.state
+    }));
+    res.json({ ok: true, total: devicesMap.length, devices: devicesMap });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 // Estado masivo
@@ -226,9 +250,7 @@ app.post('/api/hologram/device/:deviceId/reset', async (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// ======================================================================
-//  BÚSQUEDA POR ICCID DEFINITIVA (múltiples campos + paginación)
-// ======================================================================
+// Búsqueda por ICCID con múltiples campos y paginación
 app.get('/api/hologram/search/:iccid', async (req, res) => {
   const { iccid } = req.params;
   console.log(`🔍 Buscando dispositivo por ICCID: ${iccid}`);
@@ -236,7 +258,6 @@ app.get('/api/hologram/search/:iccid', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'ICCID inválido. Debe tener 18-20 dígitos.' });
   }
 
-  // 1. Intentar búsqueda directa con diferentes nombres de campo
   const fieldNames = ['sim', 'iccid', 'active_iccid', 'enabled_iccid'];
   let foundDevice = null;
   for (const field of fieldNames) {
@@ -253,7 +274,6 @@ app.get('/api/hologram/search/:iccid', async (req, res) => {
     }
   }
 
-  // 2. Si no se encontró, hacer paginación manual (fallback robusto)
   if (!foundDevice) {
     console.log("⚠️ Búsqueda directa falló. Iniciando paginación manual...");
     let page = 1;
@@ -262,12 +282,11 @@ app.get('/api/hologram/search/:iccid', async (req, res) => {
       const pageData = await hologramRequest(`devices?page=${page}&limit=${limit}`);
       if (!pageData.data || pageData.data.length === 0) break;
       foundDevice = pageData.data.find(device => {
-        const iccidFields = ['sim', 'iccid', 'active_iccid', 'enabled_iccid'];
-        return iccidFields.some(f => device[f] === iccid);
+        return device.sim === iccid || device.iccid === iccid || device.active_iccid === iccid || device.enabled_iccid === iccid;
       });
       if (foundDevice) break;
       page++;
-      if (page > 50) break; // límite de seguridad
+      if (page > 50) break;
     }
   }
 
@@ -289,13 +308,13 @@ app.get('/api/hologram/search/:iccid', async (req, res) => {
   }
 });
 
-// =========================
-//  INICIO DEL SERVIDOR
-// =========================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
   console.log(`🔧 Factor Claro: ${FACTOR_GLOBAL}`);
-  console.log(`✅ Endpoints: /api/device/full/:value, /api/device/reset/:value, /api2, /api3`);
-  console.log(`✅ Hologram: /api/hologram/health, /api/hologram/batch-state, /api/hologram/device/:deviceId/usage, /api/hologram/device/:deviceId/reset, /api/hologram/search/:iccid`);
+  console.log(`✅ Endpoints disponibles:`);
+  console.log(`   Claro: /api/device/full/:value, /api/device/reset/:value (y /api2, /api3)`);
+  console.log(`   Hologram: /api/hologram/health, /api/hologram/batch-state`);
+  console.log(`   Hologram: /api/hologram/device/:deviceId/usage, /api/hologram/device/:deviceId/reset`);
+  console.log(`   Hologram: /api/hologram/search/:iccid, /api/hologram/list-all-devices (temporal)`);
 });
