@@ -23,9 +23,6 @@ const PASSWORD = "Soporte122@";
 let TOKEN = null;
 let TOKEN_TIME = 0;
 
-// =========================
-//  CUENTAS EXTRA (CLARO)
-// =========================
 const ACCOUNTS_EXTRA = {
   cuenta2: { username: "alfben2", password: "Soporte122@", token: null, tokenTime: 0 },
   cuenta3: { username: "alfben4", password: "Soporte122@", token: null, tokenTime: 0 },
@@ -33,9 +30,6 @@ const ACCOUNTS_EXTRA = {
 
 const TOKEN_DURATION = 50 * 60 * 1000;
 
-// =========================
-//  TOKEN CLARO
-// =========================
 async function getToken() {
   const r = await axios({
     httpsAgent: agent,
@@ -47,13 +41,9 @@ async function getToken() {
   TOKEN_TIME = Date.now();
   console.log("🔑 Token Claro actualizado");
 }
-
 async function ensureToken() {
-  if (!TOKEN || Date.now() - TOKEN_TIME > TOKEN_DURATION) {
-    await getToken();
-  }
+  if (!TOKEN || Date.now() - TOKEN_TIME > TOKEN_DURATION) await getToken();
 }
-
 async function ensureTokenExtra(key) {
   const acc = ACCOUNTS_EXTRA[key];
   if (!acc.token || Date.now() - acc.tokenTime > TOKEN_DURATION) {
@@ -69,9 +59,6 @@ async function ensureTokenExtra(key) {
   }
 }
 
-// =========================
-//  REQUEST CLARO
-// =========================
 async function claroRequest(config) {
   await ensureToken();
   return axios({
@@ -84,7 +71,6 @@ async function claroRequest(config) {
     },
   });
 }
-
 async function claroRequestExtra(key, config) {
   await ensureTokenExtra(key);
   return axios({
@@ -98,9 +84,6 @@ async function claroRequestExtra(key, config) {
   });
 }
 
-// =========================
-//  FUNCIONES GENERALES CLARO
-// =========================
 function extractIMSI(item) {
   return (
     item.imsi ||
@@ -111,29 +94,20 @@ function extractIMSI(item) {
   );
 }
 
-// =========================
-//  CACHE PARA CONSUMO CLARO
-// =========================
 const usageCache = new Map();
 const CACHE_TIME = 2 * 60 * 1000;
 const FACTOR_GLOBAL = 1.902;
 const FACTORES_POR_ICCID = {};
 
-// =========================
-//  CONSUMO DÍA POR DÍA + FACTOR
-// =========================
 async function fetchUsage(request, imsi, iccid) {
   if (!imsi) return { consumoMB: 0 };
-
   const cached = usageCache.get(imsi);
   if (cached && Date.now() - cached.time < CACHE_TIME) {
     console.log(`⚡ Caché para IMSI ${imsi} → ${cached.data.consumoMB} MB`);
     return cached.data;
   }
-
   const now = new Date();
   let start, end;
-
   if (now.getDate() >= 27) {
     start = new Date(now.getFullYear(), now.getMonth(), 27);
     end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
@@ -141,21 +115,16 @@ async function fetchUsage(request, imsi, iccid) {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
     end = new Date(now.getFullYear(), now.getMonth(), 25);
   }
-
   const format = (d) => d.toISOString().split("T")[0];
-
   const dates = [];
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1))
     dates.push(format(new Date(d)));
-  }
-
   let totalMB = 0;
   const BATCH_SIZE = 6;
-
   for (let i = 0; i < dates.length; i += BATCH_SIZE) {
     const batch = dates.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
-      batch.flatMap(date => [
+      batch.flatMap((date) => [
         request({
           method: "post",
           url: `${BASE_URL}/gcapi/simUplink/usage`,
@@ -171,12 +140,11 @@ async function fetchUsage(request, imsi, iccid) {
     for (const res of results) {
       if (res && res.data && res.data.object) {
         for (const day of res.data.object) {
-          totalMB += Number(day["totalBytes(MB)"] ?? day["totalbytes(MB)"] ?? 0);
+          totalMB += Number(day["totalBytes(MB)"] ?? 0);
         }
       }
     }
   }
-
   try {
     const sessionRes = await request({
       method: "post",
@@ -184,29 +152,17 @@ async function fetchUsage(request, imsi, iccid) {
       data: { imsi, startDate: format(start), endDate: format(end) },
     });
     const sessions = sessionRes.data?.data || [];
-    let sessionMB = 0;
-    for (const s of sessions) {
-      sessionMB += Number(s.totalBytes || 0) / (1024 * 1024);
-    }
-    if (sessionMB > 0) totalMB += sessionMB;
+    for (const s of sessions) totalMB += Number(s.totalBytes || 0) / (1024 * 1024);
   } catch (err) {
     console.log("⚠️ sessionHistory falló");
   }
-
   const factor = FACTORES_POR_ICCID[iccid] || FACTOR_GLOBAL;
-  const consumoFinal = totalMB * factor;
-  const rounded = Number(consumoFinal.toFixed(3));
-
-  console.log(`📊 Consumo Claro: base ${totalMB.toFixed(3)} MB → factor ${factor} → final ${rounded} MB`);
-
+  const rounded = Number((totalMB * factor).toFixed(3));
   const result = { consumoMB: rounded };
   usageCache.set(imsi, { time: Date.now(), data: result });
   return result;
 }
 
-// =========================
-//  CORE CLARO
-// =========================
 async function fetchSim(request, value) {
   const r = await request({
     method: "post",
@@ -220,7 +176,6 @@ async function fetchSim(request, value) {
       String(i.msisdn).trim() === String(value).trim()
   );
 }
-
 async function getSimExtra(request, sim) {
   const r = await request({
     method: "post",
@@ -232,7 +187,6 @@ async function getSimExtra(request, sim) {
   );
   return { imsi: device?.imsi, plan: device?.devicePlans?.planName || "N/A" };
 }
-
 async function getTotalSims(request) {
   const r = await request({
     method: "post",
@@ -298,7 +252,6 @@ function buildReset(path, requestFn) {
 buildEndpoint("/api/device/full/:value", claroRequest);
 buildEndpoint("/api2/device/full/:value", (cfg) => claroRequestExtra("cuenta2", cfg));
 buildEndpoint("/api3/device/full/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
-
 buildReset("/api/device/reset/:value", claroRequest);
 buildReset("/api2/device/reset/:value", (cfg) => claroRequestExtra("cuenta2", cfg));
 buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cfg));
@@ -306,11 +259,11 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM
 // =========================
-// 🔧 REEMPLAZA ESTE TOKEN CON TU API KEY DE HOLOGRAM CODIFICADA EN BASE64
-// Formato: const HOLOGRAM_API_TOKEN = Buffer.from(`apikey:TU_CLAVE`).toString('base64');
+// ⚠️ REEMPLAZA ESTA VARIABLE CON TU API KEY DE HOLOGRAM CODIFICADA EN BASE64
+// Debe tener permisos de lectura de dispositivos (read:devices)
 const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
 
-async function hologramRequest(endpoint, method = 'GET', body = null) {
+async function hologramRequest(endpoint, method = "GET", body = null) {
   const config = {
     method,
     url: `https://dashboard.hologram.io/api/1/${endpoint}`,
@@ -323,7 +276,6 @@ async function hologramRequest(endpoint, method = 'GET', body = null) {
   };
   if (body) config.data = body;
   const response = await axios(config);
-  // La API puede devolver success:true o directamente los datos
   if (response.data && response.data.success === true) return response.data;
   if (response.data && (response.data.data !== undefined || Array.isArray(response.data))) return response.data;
   console.error(`Respuesta de Hologram (${endpoint}):`, JSON.stringify(response.data, null, 2));
@@ -340,7 +292,7 @@ app.get("/api/hologram/health", async (req, res) => {
   }
 });
 
-// Listar todos los dispositivos (útil para depuración)
+// Listar todos los dispositivos (para depuración)
 app.get("/api/hologram/list-all-devices", async (req, res) => {
   try {
     let page = 1;
@@ -353,7 +305,7 @@ app.get("/api/hologram/list-all-devices", async (req, res) => {
       if (response.data.length < limit) break;
       page++;
     }
-    const devicesMap = allDevices.map(d => ({
+    const devicesMap = allDevices.map((d) => ({
       deviceId: d.id,
       iccid: d.sim || d.iccid || d.active_iccid || d.enabled_iccid || "NO_ICCID",
       name: d.name,
@@ -393,7 +345,7 @@ app.post("/api/hologram/batch-state", async (req, res) => {
   }
 });
 
-// Consulta de uso de datos (últimos 30 días por defecto)
+// Consulta de uso de datos
 app.get("/api/hologram/device/:deviceId/usage", async (req, res) => {
   const deviceId = parseInt(req.params.deviceId);
   if (isNaN(deviceId)) {
@@ -435,7 +387,7 @@ app.get("/api/hologram/device/:deviceId/usage", async (req, res) => {
   }
 });
 
-// Reset de dispositivo (pausa + reactivación con espera)
+// Reset de dispositivo (pausa + reactivación)
 app.post("/api/hologram/device/:deviceId/reset", async (req, res) => {
   const deviceId = parseInt(req.params.deviceId);
   if (isNaN(deviceId)) {
@@ -498,9 +450,9 @@ app.post("/api/hologram/device/:deviceId/reset", async (req, res) => {
   }
 });
 
-// ======================================================================
-//  BÚSQUEDA POR ICCID (usando parámetro "sim" según documentación oficial)
-// ======================================================================
+// ====================================================================
+//  BÚSQUEDA POR ICCID CON FALLBACK DE PAGINACIÓN (SOLUCIÓN ROBUSTA)
+// ====================================================================
 app.get("/api/hologram/search/:iccid", async (req, res) => {
   const { iccid } = req.params;
   console.log(`🔍 Buscando dispositivo por ICCID: ${iccid}`);
@@ -510,21 +462,54 @@ app.get("/api/hologram/search/:iccid", async (req, res) => {
   }
 
   try {
-    // Endpoint documentado: GET /devices?sim={iccid}
-    const response = await hologramRequest(`devices?sim=${encodeURIComponent(iccid)}`);
-    const devices = response.data || response;
-    if (devices && devices.length > 0) {
-      const device = devices[0];
-      console.log(`✅ Dispositivo encontrado: ID=${device.id}`);
+    // 1. Intento directo con el parámetro 'sim' (según documentación)
+    let foundDevice = null;
+    try {
+      const directResponse = await hologramRequest(`devices?sim=${encodeURIComponent(iccid)}`);
+      const devices = directResponse.data || directResponse;
+      if (devices && devices.length > 0) {
+        foundDevice = devices[0];
+        console.log(`✅ Encontrado mediante búsqueda directa con 'sim'`);
+      }
+    } catch (err) {
+      console.log(`Búsqueda directa falló: ${err.message}`);
+    }
+
+    // 2. Si no se encontró, hacer paginación manual (recorrer todas las páginas)
+    if (!foundDevice) {
+      console.log("⚠️ Búsqueda directa no encontró el ICCID. Iniciando paginación manual...");
+      let page = 1;
+      const limit = 100;
+      let devicesPage;
+      while (!foundDevice) {
+        const response = await hologramRequest(`devices?page=${page}&limit=${limit}`);
+        devicesPage = response.data || response;
+        if (!devicesPage || devicesPage.length === 0) break;
+        foundDevice = devicesPage.find(
+          (d) =>
+            d.sim === iccid ||
+            d.iccid === iccid ||
+            d.active_iccid === iccid ||
+            d.enabled_iccid === iccid
+        );
+        if (foundDevice) break;
+        page++;
+        if (page > 50) break; // límite de seguridad
+      }
+      if (foundDevice) console.log(`✅ Encontrado mediante paginación en página ${page}`);
+    }
+
+    if (foundDevice) {
+      console.log(`✅ Dispositivo encontrado: ID=${foundDevice.id}`);
       res.json({
         ok: true,
-        deviceId: device.id,
-        name: device.name,
-        iccid: device.sim || iccid,
-        state: device.active_link_state || device.state,
-        phonenumber: device.phonenumber,
-        imei: device.imei,
-        plan: device.plan_name,
+        deviceId: foundDevice.id,
+        name: foundDevice.name,
+        iccid: foundDevice.sim || foundDevice.iccid || iccid,
+        state: foundDevice.active_link_state || foundDevice.state,
+        phonenumber: foundDevice.phonenumber,
+        imei: foundDevice.imei,
+        plan: foundDevice.plan_name,
       });
     } else {
       console.log(`❌ No se encontró ningún dispositivo con ICCID ${iccid}`);
