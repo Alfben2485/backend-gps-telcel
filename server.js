@@ -259,14 +259,28 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM
 // =========================
-// 🟢 NUEVA API KEY (proporcionada por el usuario)
 const HOLOGRAM_RAW_API_KEY = "3npRw1lc40oKF0hDQofoeKpJBngvGi";
+const HOLOGRAM_ORG_ID = "92626";  // Tu Organization ID
 const HOLOGRAM_API_TOKEN = Buffer.from(`apikey:${HOLOGRAM_RAW_API_KEY}`).toString('base64');
 
+// Función auxiliar para agregar orgid a las URL de dispositivos
+function addOrgIdToEndpoint(endpoint) {
+  if (endpoint.includes('devices') && !endpoint.includes('orgid')) {
+    const separator = endpoint.includes('?') ? '&' : '?';
+    return `${endpoint}${separator}orgid=${HOLOGRAM_ORG_ID}`;
+  }
+  return endpoint;
+}
+
 async function hologramRequest(endpoint, method = "GET", body = null) {
+  // Agregar orgid a los endpoints de dispositivos y búsqueda
+  let finalEndpoint = endpoint;
+  if (endpoint.includes('/devices')) {
+    finalEndpoint = addOrgIdToEndpoint(endpoint);
+  }
   const config = {
     method,
-    url: `https://dashboard.hologram.io/api/1/${endpoint}`,
+    url: `https://dashboard.hologram.io/api/1/${finalEndpoint}`,
     headers: {
       Authorization: `Basic ${HOLOGRAM_API_TOKEN}`,
       "Content-Type": "application/json",
@@ -293,7 +307,7 @@ app.get("/api/hologram/health", async (req, res) => {
   }
 });
 
-// Listar todos los dispositivos (para depuración y verificar la clave)
+// Listar todos los dispositivos (depuración)
 app.get("/api/hologram/list-all-devices", async (req, res) => {
   try {
     let page = 1;
@@ -452,7 +466,7 @@ app.post("/api/hologram/device/:deviceId/reset", async (req, res) => {
 });
 
 // ====================================================================
-//  BÚSQUEDA POR ICCID (con la nueva API key)
+//  BÚSQUEDA POR ICCID (con organización configurada)
 // ====================================================================
 app.get("/api/hologram/search/:iccid", async (req, res) => {
   const { iccid } = req.params;
@@ -464,7 +478,7 @@ app.get("/api/hologram/search/:iccid", async (req, res) => {
 
   try {
     let foundDevice = null;
-    // Intento directo con parámetro 'sim'
+    // Intento directo con parámetro 'sim' (incluyendo orgid)
     try {
       const directResponse = await hologramRequest(`devices?sim=${encodeURIComponent(iccid)}`);
       const devices = directResponse.data || directResponse;
