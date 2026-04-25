@@ -261,7 +261,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 // ⚠️ REEMPLAZA ESTA VARIABLE CON TU API KEY DE HOLOGRAM CODIFICADA EN BASE64
 // Debe tener permisos de lectura de dispositivos (read:devices)
-const HOLOGRAM_API_TOKEN = "YXBpa2V5OjZKSVlEcVF0VXpwcGZFcmVxeENLSE1RWExJMWt2Yg==";
+const HOLOGRAM_API_TOKEN = "3npRw1lc40oKF0hDQofoekPJBngvGi";
 
 async function hologramRequest(endpoint, method = "GET", body = null) {
   const config = {
