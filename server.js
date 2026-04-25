@@ -259,9 +259,9 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 //  INTEGRACIÓN CON HOLOGRAM
 // =========================
-// ⚠️ REEMPLAZA ESTA VARIABLE CON TU API KEY DE HOLOGRAM CODIFICADA EN BASE64
-// Debe tener permisos de lectura de dispositivos (read:devices)
-const HOLOGRAM_API_TOKEN = "3npRw1lc40oKF0hDQofoekPJBngvGi";
+// 🟢 NUEVA API KEY (proporcionada por el usuario)
+const HOLOGRAM_RAW_API_KEY = "3npRw1lc40oKF0hDQofoeKpJBngvGi";
+const HOLOGRAM_API_TOKEN = Buffer.from(`apikey:${HOLOGRAM_RAW_API_KEY}`).toString('base64');
 
 async function hologramRequest(endpoint, method = "GET", body = null) {
   const config = {
@@ -276,6 +276,7 @@ async function hologramRequest(endpoint, method = "GET", body = null) {
   };
   if (body) config.data = body;
   const response = await axios(config);
+  // La API puede devolver success:true o directamente los datos
   if (response.data && response.data.success === true) return response.data;
   if (response.data && (response.data.data !== undefined || Array.isArray(response.data))) return response.data;
   console.error(`Respuesta de Hologram (${endpoint}):`, JSON.stringify(response.data, null, 2));
@@ -292,7 +293,7 @@ app.get("/api/hologram/health", async (req, res) => {
   }
 });
 
-// Listar todos los dispositivos (para depuración)
+// Listar todos los dispositivos (para depuración y verificar la clave)
 app.get("/api/hologram/list-all-devices", async (req, res) => {
   try {
     let page = 1;
@@ -451,7 +452,7 @@ app.post("/api/hologram/device/:deviceId/reset", async (req, res) => {
 });
 
 // ====================================================================
-//  BÚSQUEDA POR ICCID CON FALLBACK DE PAGINACIÓN (SOLUCIÓN ROBUSTA)
+//  BÚSQUEDA POR ICCID (con la nueva API key)
 // ====================================================================
 app.get("/api/hologram/search/:iccid", async (req, res) => {
   const { iccid } = req.params;
@@ -462,8 +463,8 @@ app.get("/api/hologram/search/:iccid", async (req, res) => {
   }
 
   try {
-    // 1. Intento directo con el parámetro 'sim' (según documentación)
     let foundDevice = null;
+    // Intento directo con parámetro 'sim'
     try {
       const directResponse = await hologramRequest(`devices?sim=${encodeURIComponent(iccid)}`);
       const devices = directResponse.data || directResponse;
@@ -475,15 +476,14 @@ app.get("/api/hologram/search/:iccid", async (req, res) => {
       console.log(`Búsqueda directa falló: ${err.message}`);
     }
 
-    // 2. Si no se encontró, hacer paginación manual (recorrer todas las páginas)
+    // Fallback paginado
     if (!foundDevice) {
       console.log("⚠️ Búsqueda directa no encontró el ICCID. Iniciando paginación manual...");
       let page = 1;
       const limit = 100;
-      let devicesPage;
       while (!foundDevice) {
         const response = await hologramRequest(`devices?page=${page}&limit=${limit}`);
-        devicesPage = response.data || response;
+        const devicesPage = response.data || response;
         if (!devicesPage || devicesPage.length === 0) break;
         foundDevice = devicesPage.find(
           (d) =>
@@ -494,7 +494,7 @@ app.get("/api/hologram/search/:iccid", async (req, res) => {
         );
         if (foundDevice) break;
         page++;
-        if (page > 50) break; // límite de seguridad
+        if (page > 50) break;
       }
       if (foundDevice) console.log(`✅ Encontrado mediante paginación en página ${page}`);
     }
