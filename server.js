@@ -364,6 +364,7 @@ buildReset("/api3/device/reset/:value", (cfg) => claroRequestExtra("cuenta3", cf
 // =========================
 // 🚀 START
 // =========================
+// RUGAS SE LA COME
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 SERVER CON FACTOR DE CORRECCIÓN GLOBAL SI SE CAMBIA OSWALDO");
   console.log(`🔧 Factor aplicado: ${FACTOR_GLOBAL}`);
