@@ -143,7 +143,7 @@ const CACHE_TIME = 2 * 60 * 1000;
 // =========================
 // Calculado como: valor real en plataforma (4.585) / valor obtenido por API (2.41) = 1.902
 // Si para otras SIMs la relación es diferente, ajusta este número o añade factores específicos por ICCID.
-const FACTOR_GLOBAL = 1.902;
+const FACTOR_GLOBAL = 0;
 
 // Factores específicos por ICCID (opcional, sobrescribe al global)
 const FACTORES_POR_ICCID = {
