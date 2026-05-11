@@ -167,7 +167,7 @@ async function fetchUsage(request, imsi, iccid) {
 
   // Ciclo de facturación original que funcionaba: 27 → 25
   if (now.getDate() >= 27) {
-    start = new Date(now.getFullYear(), now.getMonth(), 27);
+    start = new Date(now.getFullYear(), now.getMonth(), 26);
     end = new Date(now.getFullYear(), now.getMonth() + 1, 25);
   } else {
     start = new Date(now.getFullYear(), now.getMonth() - 1, 27);
