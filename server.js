@@ -110,7 +110,7 @@ async function claroRequestExtra(key, config) {
 
   return axios({
     httpsAgent: agent,
-    timeout: 15000,
+    timeout: 13000,
     ...config,
     headers: {
       Authorization: `Bearer ${ACCOUNTS_EXTRA[key].token}`,
@@ -136,7 +136,7 @@ function extractIMSI(item) {
 // 🧠 CACHE (2 minutos)
 // =========================
 const usageCache = new Map();
-const CACHE_TIME = 5 * 60 * 1000;
+const CACHE_TIME = 2 * 60 * 1000;
 
 // =========================
 // 🔧 FACTOR DE CORRECCIÓN GLOBAL
@@ -250,7 +250,7 @@ async function fetchSim(request, value) {
     url: `${BASE_URL}/gcapi/device/list`,
     data: {
       start: 0,
-      length: 10,
+      length: 5,
       search: { value },
     },
   });
