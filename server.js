@@ -96,7 +96,7 @@ async function claroRequest(config) {
 
   return axios({
     httpsAgent: agent,
-    timeout: 15000,
+    timeout: 18000,
     ...config,
     headers: {
       Authorization: `Bearer ${TOKEN}`,
