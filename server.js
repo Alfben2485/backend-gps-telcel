@@ -136,7 +136,7 @@ function extractIMSI(item) {
 // 🧠 CACHE (2 minutos)
 // =========================
 const usageCache = new Map();
-const CACHE_TIME = 2 * 60 * 1000;
+const CACHE_TIME = 3 * 60 * 1000;
 
 // =========================
 // 🔧 FACTOR DE CORRECCIÓN GLOBAL
